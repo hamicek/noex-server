@@ -93,7 +93,12 @@ export class NoexServer {
 
     wss.on('connection', (ws, request) => {
       const remoteAddress = request.socket.remoteAddress ?? 'unknown';
-      void addConnection(supervisorRef, ws, remoteAddress);
+      void addConnection(
+        supervisorRef,
+        ws,
+        remoteAddress,
+        resolvedWithRateLimiter.heartbeat.intervalMs,
+      );
     });
 
     return server;

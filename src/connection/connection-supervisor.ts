@@ -7,6 +7,7 @@ import {
   type ConnectionState,
   type ConnectionCast,
 } from './connection-server.js';
+import { startHeartbeat } from '../lifecycle/heartbeat.js';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -47,6 +48,7 @@ export async function addConnection(
   supervisorRef: SupervisorRef,
   ws: WebSocket,
   remoteAddress: string,
+  heartbeatIntervalMs: number,
 ): Promise<ConnectionRef> {
   const ref = await Supervisor.startChild(supervisorRef, [
     ws,
@@ -61,7 +63,13 @@ export async function addConnection(
     }
   });
 
+  const heartbeat = startHeartbeat(
+    () => GenServer.cast(ref, { type: 'heartbeat_tick' }),
+    heartbeatIntervalMs,
+  );
+
   ws.on('close', () => {
+    heartbeat.stop();
     void GenServer.stop(ref, 'normal');
   });
 

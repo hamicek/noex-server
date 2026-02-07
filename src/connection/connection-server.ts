@@ -9,6 +9,7 @@ import {
   serializeError,
   serializeResult,
   serializePush,
+  serializePing,
 } from '../protocol/serializer.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
@@ -106,7 +107,7 @@ export function createConnectionBehavior(
         case 'ws_error':
           return state;
         case 'heartbeat_tick':
-          return state;
+          return handleHeartbeatTick(state);
         case 'push':
           return handlePush(msg, state);
       }
@@ -220,6 +221,24 @@ function handlePush(
     serializePush(msg.subscriptionId, msg.channel, msg.data),
   );
   return state;
+}
+
+// ── Internal: Heartbeat ──────────────────────────────────────────
+
+function handleHeartbeatTick(state: ConnectionState): ConnectionState {
+  const now = Date.now();
+
+  // If we sent a ping and the client hasn't responded since
+  if (state.lastPingAt > 0 && state.lastPongAt < state.lastPingAt) {
+    if (state.ws.readyState === WS_OPEN) {
+      state.ws.close(4001, 'heartbeat_timeout');
+    }
+    return state;
+  }
+
+  // Send a new ping
+  sendRaw(state.ws, serializePing(now));
+  return { ...state, lastPingAt: now };
 }
 
 // ── Internal: Auth Check ──────────────────────────────────────────
