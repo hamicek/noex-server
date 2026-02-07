@@ -12,6 +12,7 @@ import {
 } from '../protocol/serializer.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
+import { handleStoreRequest } from '../proxy/store-proxy.js';
 
 // ── State ─────────────────────────────────────────────────────────
 
@@ -251,16 +252,13 @@ async function routeRequest(
   );
 }
 
-// ── Internal: Operation Stubs (replaced by proxies in later steps)
+// ── Internal: Store Operations ────────────────────────────────────
 
 async function handleStoreOperation(
-  _request: ClientRequest,
-  _state: ConnectionState,
-): Promise<never> {
-  throw new NoexServerError(
-    ErrorCode.UNKNOWN_OPERATION,
-    'Store operations are not yet implemented',
-  );
+  request: ClientRequest,
+  state: ConnectionState,
+): Promise<unknown> {
+  return handleStoreRequest(request, state.config.store);
 }
 
 async function handleRulesOperation(

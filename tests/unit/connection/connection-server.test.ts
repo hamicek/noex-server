@@ -197,7 +197,7 @@ describe('ConnectionServer', () => {
       expect(ws.sent).toHaveLength(0);
     });
 
-    it('responds with UNKNOWN_OPERATION for store operations', async () => {
+    it('responds with error for store operations on mock store', async () => {
       GenServer.cast(ref!, {
         type: 'ws_message',
         raw: '{"id":1,"type":"store.all","bucket":"users"}',
@@ -207,7 +207,8 @@ describe('ConnectionServer', () => {
       const response = parseResponse(ws);
       expect(response['type']).toBe('error');
       expect(response['id']).toBe(1);
-      expect(response['code']).toBe('UNKNOWN_OPERATION');
+      // Mock store has no bucket() method → INTERNAL_ERROR
+      expect(response['code']).toBe('INTERNAL_ERROR');
     });
 
     it('responds with RULES_NOT_AVAILABLE when rules not configured', async () => {
@@ -461,7 +462,8 @@ describe('ConnectionServer', () => {
       const response = parseResponse(ws);
       expect(response['id']).toBe(1);
       expect(response['type']).toBe('error');
-      expect(response['code']).toBe('UNKNOWN_OPERATION');
+      // Missing bucket field → VALIDATION_ERROR from store-proxy
+      expect(response['code']).toBe('VALIDATION_ERROR');
     });
 
     it('stops GenServer on WebSocket close', async () => {
