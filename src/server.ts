@@ -1,8 +1,10 @@
+import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import type { SupervisorRef } from '@hamicek/noex';
 import { RateLimiter, type RateLimiterRef } from '@hamicek/noex';
 import type { ServerConfig } from './config.js';
 import { resolveConfig, type ResolvedServerConfig } from './config.js';
+import { serializeSystem } from './protocol/serializer.js';
 import {
   startConnectionSupervisor,
   addConnection,
@@ -23,10 +25,15 @@ export interface ServerStats {
   readonly rulesEnabled: boolean;
 }
 
+// ── WebSocket readyState constants ────────────────────────────────
+
+const WS_OPEN = 1;
+
 // ── NoexServer ────────────────────────────────────────────────────
 
 export class NoexServer {
   readonly #config: ResolvedServerConfig;
+  readonly #httpServer: HttpServer;
   readonly #wss: InstanceType<typeof WebSocketServer>;
   readonly #supervisorRef: SupervisorRef;
   readonly #rateLimiterRef: RateLimiterRef | null;
@@ -35,11 +42,13 @@ export class NoexServer {
 
   private constructor(
     config: ResolvedServerConfig,
+    httpServer: HttpServer,
     wss: InstanceType<typeof WebSocketServer>,
     supervisorRef: SupervisorRef,
     rateLimiterRef: RateLimiterRef | null,
   ) {
     this.#config = config;
+    this.#httpServer = httpServer;
     this.#wss = wss;
     this.#supervisorRef = supervisorRef;
     this.#rateLimiterRef = rateLimiterRef;
@@ -50,8 +59,9 @@ export class NoexServer {
   /**
    * Starts a new NoexServer instance.
    *
-   * Creates a WebSocket server and a connection supervisor that manages
-   * individual connection GenServers via a simple_one_for_one strategy.
+   * Creates an HTTP server with a WebSocket upgrade handler and a connection
+   * supervisor that manages individual connection GenServers via a
+   * simple_one_for_one strategy.
    */
   static async start(config: ServerConfig): Promise<NoexServer> {
     const resolved = resolveConfig(config);
@@ -68,18 +78,35 @@ export class NoexServer {
     const resolvedWithRateLimiter = { ...resolved, rateLimiterRef };
     const supervisorRef = await startConnectionSupervisor(resolvedWithRateLimiter);
 
+    let httpServer: HttpServer;
     let wss: InstanceType<typeof WebSocketServer>;
     try {
+      httpServer = createServer();
       wss = new WebSocketServer({
-        port: resolvedWithRateLimiter.port,
-        host: resolvedWithRateLimiter.host,
-        path: resolvedWithRateLimiter.path,
+        noServer: true,
         maxPayload: resolvedWithRateLimiter.maxPayloadBytes,
       });
 
+      httpServer.on('upgrade', (request, socket, head) => {
+        const pathname = new URL(
+          request.url ?? '/',
+          `http://${request.headers['host'] ?? 'localhost'}`,
+        ).pathname;
+
+        if (pathname !== resolvedWithRateLimiter.path) {
+          socket.destroy();
+          return;
+        }
+
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit('connection', ws, request);
+        });
+      });
+
       await new Promise<void>((resolve, reject) => {
-        wss.once('listening', resolve);
-        wss.once('error', reject);
+        httpServer.once('listening', resolve);
+        httpServer.once('error', reject);
+        httpServer.listen(resolvedWithRateLimiter.port, resolvedWithRateLimiter.host);
       });
     } catch (error) {
       await stopConnectionSupervisor(supervisorRef);
@@ -89,9 +116,19 @@ export class NoexServer {
       throw error;
     }
 
-    const server = new NoexServer(resolvedWithRateLimiter, wss, supervisorRef, rateLimiterRef);
+    const server = new NoexServer(
+      resolvedWithRateLimiter,
+      httpServer,
+      wss,
+      supervisorRef,
+      rateLimiterRef,
+    );
 
     wss.on('connection', (ws, request) => {
+      if (!server.#running) {
+        ws.close(1001, 'server_shutting_down');
+        return;
+      }
       const remoteAddress = request.socket.remoteAddress ?? 'unknown';
       void addConnection(
         supervisorRef,
@@ -107,39 +144,68 @@ export class NoexServer {
   /**
    * Gracefully stops the server.
    *
-   * 1. Stops accepting new connections.
-   * 2. Terminates all existing connections via the supervisor.
+   * 1. Stops accepting new connections (closes the HTTP server).
+   * 2. If a grace period is specified, broadcasts a shutdown notification
+   *    to all connected clients and waits for them to disconnect (or for
+   *    the grace period to expire).
+   * 3. Force-stops all remaining connections via the supervisor.
+   * 4. Stops the rate limiter.
    */
-  async stop(): Promise<void> {
+  async stop(options?: { gracePeriodMs?: number }): Promise<void> {
     if (!this.#running) return;
     this.#running = false;
 
-    // Initiate WSS close — stops accepting new connections.
-    // The callback fires when the underlying HTTP server is fully closed,
-    // which happens after all TCP sockets (including upgraded WS) are closed.
-    const wssClosed = new Promise<void>((resolve, reject) => {
-      this.#wss.close((err) => {
+    const gracePeriodMs = options?.gracePeriodMs ?? 0;
+
+    // 1. Stop accepting new connections.
+    const httpClosed = new Promise<void>((resolve, reject) => {
+      this.#httpServer.close((err) => {
         if (err) reject(err);
         else resolve();
       });
     });
 
-    // Stop all existing connections via the supervisor.
-    // Each connection's terminate() sends a WS close frame.
+    // 2. If a grace period is requested, notify clients and wait.
+    if (gracePeriodMs > 0 && this.#wss.clients.size > 0) {
+      const msg = serializeSystem('shutdown', { gracePeriodMs });
+      for (const client of this.#wss.clients) {
+        if (client.readyState === WS_OPEN) {
+          client.send(msg);
+        }
+      }
+
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, gracePeriodMs);
+
+        const check = () => {
+          if (this.#wss.clients.size === 0) {
+            clearTimeout(timer);
+            resolve();
+          }
+        };
+
+        for (const client of this.#wss.clients) {
+          client.once('close', check);
+        }
+      });
+    }
+
+    // 3. Stop all remaining connections via the supervisor.
+    //    Each connection's terminate() sends a WS close frame.
     await stopConnectionSupervisor(this.#supervisorRef);
 
-    // Stop the rate limiter if it was started.
+    // 4. Stop the rate limiter if it was started.
     if (this.#rateLimiterRef !== null) {
       await RateLimiter.stop(this.#rateLimiterRef);
     }
 
-    // Wait for WSS to finish closing.
-    await wssClosed;
+    // 5. Wait for the HTTP server to finish closing.
+    await httpClosed;
   }
 
   /** The port the server is listening on. */
   get port(): number {
-    const addr = this.#wss.address();
+    const addr = this.#httpServer.address();
     if (addr !== null && typeof addr === 'object') {
       return addr.port;
     }

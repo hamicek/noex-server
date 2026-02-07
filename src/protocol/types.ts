@@ -56,12 +56,19 @@ export interface HeartbeatPing {
   readonly timestamp: number;
 }
 
+export interface SystemMessage {
+  readonly type: 'system';
+  readonly event: string;
+  readonly [key: string]: unknown;
+}
+
 export type ServerMessage =
   | SuccessResponse
   | ErrorResponse
   | PushMessage
   | WelcomeMessage
-  | HeartbeatPing;
+  | HeartbeatPing
+  | SystemMessage;
 
 // ---------------------------------------------------------------------------
 // Helpers

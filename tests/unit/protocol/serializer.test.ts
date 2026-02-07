@@ -5,6 +5,7 @@ import {
   serializePush,
   serializeWelcome,
   serializePing,
+  serializeSystem,
 } from '../../../src/protocol/serializer.js';
 
 function parse(json: string): Record<string, unknown> {
@@ -158,5 +159,38 @@ describe('serializePing', () => {
       type: 'ping',
       timestamp: 1700000000000,
     });
+  });
+});
+
+describe('serializeSystem', () => {
+  it('serializes a system event without data', () => {
+    const msg = parse(serializeSystem('shutdown'));
+
+    expect(msg).toEqual({
+      type: 'system',
+      event: 'shutdown',
+    });
+  });
+
+  it('serializes a system event with data', () => {
+    const msg = parse(serializeSystem('shutdown', { gracePeriodMs: 5000 }));
+
+    expect(msg).toEqual({
+      type: 'system',
+      event: 'shutdown',
+      gracePeriodMs: 5000,
+    });
+  });
+
+  it('spreads multiple data fields', () => {
+    const msg = parse(serializeSystem('maintenance', {
+      scheduledAt: 1700000000000,
+      reason: 'upgrade',
+    }));
+
+    expect(msg['type']).toBe('system');
+    expect(msg['event']).toBe('maintenance');
+    expect(msg['scheduledAt']).toBe(1700000000000);
+    expect(msg['reason']).toBe('upgrade');
   });
 });

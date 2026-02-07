@@ -30,6 +30,7 @@ export type {
   WelcomeMessage,
   HeartbeatPing,
   HeartbeatPong,
+  SystemMessage,
   ServerMessage,
   ClientMessage,
 } from './protocol/types.js';

@@ -327,6 +327,162 @@ describe('Integration: Connection Lifecycle', () => {
     });
   });
 
+  // ── Graceful Shutdown ────────────────────────────────────────────
+
+  describe('graceful shutdown', () => {
+    it('broadcasts a system shutdown message to all clients', async () => {
+      store = await Store.start({ name: `conn-test-${++storeCounter}` });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+
+      const c1 = await connectClient(server.port);
+      const c2 = await connectClient(server.port);
+      clients.push(c1.ws, c2.ws);
+      await flush();
+
+      const msgs1 = collectMessages(c1.ws, 1, 2000);
+      const msgs2 = collectMessages(c2.ws, 1, 2000);
+
+      await server.stop({ gracePeriodMs: 500 });
+
+      const [m1] = await msgs1;
+      const [m2] = await msgs2;
+
+      expect(m1!['type']).toBe('system');
+      expect(m1!['event']).toBe('shutdown');
+      expect(m1!['gracePeriodMs']).toBe(500);
+
+      expect(m2!['type']).toBe('system');
+      expect(m2!['event']).toBe('shutdown');
+    });
+
+    it('closes remaining clients after grace period expires', async () => {
+      store = await Store.start({ name: `conn-test-${++storeCounter}` });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+      await flush();
+
+      const closed = new Promise<number>((resolve) => {
+        ws.once('close', (code) => resolve(code));
+      });
+
+      await server.stop({ gracePeriodMs: 100 });
+
+      const closeCode = await closed;
+      expect(closeCode).toBe(1000);
+      expect(ws.readyState).toBe(WebSocket.CLOSED);
+    });
+
+    it('exits early when all clients disconnect during grace period', async () => {
+      store = await Store.start({ name: `conn-test-${++storeCounter}` });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+
+      const c1 = await connectClient(server.port);
+      const c2 = await connectClient(server.port);
+      clients.push(c1.ws, c2.ws);
+      await flush();
+
+      // Start stop with a long grace period
+      const stopPromise = server.stop({ gracePeriodMs: 10_000 });
+
+      // Wait a tick for the shutdown message to be sent
+      await flush(50);
+
+      // Disconnect both clients voluntarily
+      await closeClient(c1.ws);
+      await closeClient(c2.ws);
+
+      // stop() should resolve quickly (well before the 10s grace period)
+      const before = Date.now();
+      await stopPromise;
+      const elapsed = Date.now() - before;
+
+      expect(elapsed).toBeLessThan(2000);
+    });
+
+    it('rejects new connections during grace period', async () => {
+      store = await Store.start({ name: `conn-test-${++storeCounter}` });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+      const port = server.port;
+
+      const { ws } = await connectClient(port);
+      clients.push(ws);
+      await flush();
+
+      // Start stop with a grace period — keep one client connected
+      const stopPromise = server.stop({ gracePeriodMs: 500 });
+
+      // Try to connect a new client during the grace period
+      await expect(
+        new Promise<void>((resolve, reject) => {
+          const newWs = new WebSocket(`ws://127.0.0.1:${port}`);
+          newWs.once('open', () => {
+            // If it opens, it should be immediately closed by the server
+            newWs.once('close', () => reject(new Error('closed_during_shutdown')));
+          });
+          newWs.once('error', reject);
+        }),
+      ).rejects.toThrow();
+
+      await stopPromise;
+    });
+
+    it('does not send shutdown message when grace period is 0', async () => {
+      store = await Store.start({ name: `conn-test-${++storeCounter}` });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+      await flush();
+
+      // Collect any messages — with gracePeriodMs=0, no shutdown message is sent
+      const msgs = collectMessages(ws, 1, 300);
+
+      await server.stop();
+
+      const received = await msgs;
+      // No system shutdown message — connection closed directly
+      const systemMsgs = received.filter((m) => m['type'] === 'system');
+      expect(systemMsgs).toHaveLength(0);
+    });
+
+    it('clients can still process requests during grace period', async () => {
+      store = await Store.start({ name: `conn-test-${++storeCounter}` });
+      await store.defineBucket('items', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          name: { type: 'string', required: true },
+        },
+      });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+      await flush();
+
+      // Start shutdown with a generous grace period
+      const stopPromise = server.stop({ gracePeriodMs: 2000 });
+
+      // Wait for the shutdown message to arrive
+      await flush(50);
+
+      // Client can still send requests during the grace period
+      const resp = await sendRequest(ws, {
+        type: 'store.insert',
+        bucket: 'items',
+        data: { name: 'last-minute' },
+      });
+
+      expect(resp['type']).toBe('result');
+
+      // Close client to allow stop to finish early
+      await closeClient(ws);
+      await stopPromise;
+    });
+  });
+
   // ── Protocol Error Handling ────────────────────────────────────
 
   describe('protocol error handling', () => {

@@ -34,3 +34,10 @@ export function serializeWelcome(config: WelcomeConfig): string {
 export function serializePing(timestamp: number): string {
   return JSON.stringify({ type: 'ping', timestamp });
 }
+
+export function serializeSystem(
+  event: string,
+  data?: Record<string, unknown>,
+): string {
+  return JSON.stringify({ type: 'system', event, ...data });
+}
