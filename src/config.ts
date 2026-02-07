@@ -1,3 +1,4 @@
+import type { RateLimiterRef } from '@hamicek/noex';
 import type { Store } from '@hamicek/noex-store';
 import type { RuleEngine } from '@hamicek/noex-rules';
 
@@ -108,6 +109,7 @@ export interface ResolvedServerConfig {
   readonly maxPayloadBytes: number;
   readonly auth: AuthConfig | null;
   readonly rateLimit: RateLimitConfig | null;
+  readonly rateLimiterRef: RateLimiterRef | null;
   readonly heartbeat: HeartbeatConfig;
   readonly backpressure: BackpressureConfig;
   readonly name: string;
@@ -125,6 +127,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     maxPayloadBytes: config.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
     auth: config.auth ?? null,
     rateLimit: config.rateLimit ?? null,
+    rateLimiterRef: null,
     heartbeat: config.heartbeat ?? DEFAULT_HEARTBEAT,
     backpressure: config.backpressure ?? DEFAULT_BACKPRESSURE,
     name: config.name ?? DEFAULT_NAME,

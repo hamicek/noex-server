@@ -1,6 +1,6 @@
 import type { WebSocket } from 'ws';
 import type { GenServerBehavior, GenServerRef } from '@hamicek/noex';
-import { GenServer } from '@hamicek/noex';
+import { GenServer, RateLimiter, RateLimitExceededError } from '@hamicek/noex';
 import type { ResolvedServerConfig, AuthSession } from '../config.js';
 import type { ClientRequest } from '../protocol/types.js';
 import { parseMessage } from '../protocol/parser.js';
@@ -183,6 +183,7 @@ async function handleWsMessage(
 
   try {
     checkAuth(state, request);
+    await checkRateLimit(state);
     const result = await routeRequest(request, state);
     sendRaw(state.ws, serializeResult(request.id, result));
   } catch (error) {
@@ -252,6 +253,27 @@ function checkAuth(state: ConnectionState, request: ClientRequest): void {
 
   if (auth?.permissions !== undefined && state.session !== null) {
     checkPermissions(state.session, request, auth.permissions);
+  }
+}
+
+// ── Internal: Rate Limit Check ───────────────────────────────────
+
+async function checkRateLimit(state: ConnectionState): Promise<void> {
+  if (state.config.rateLimiterRef === null) return;
+
+  const key = state.session?.userId ?? state.remoteAddress;
+
+  try {
+    await RateLimiter.consume(state.config.rateLimiterRef, key);
+  } catch (error) {
+    if (error instanceof RateLimitExceededError) {
+      throw new NoexServerError(
+        ErrorCode.RATE_LIMITED,
+        `Rate limit exceeded. Retry after ${error.retryAfterMs}ms`,
+        { retryAfterMs: error.retryAfterMs },
+      );
+    }
+    throw error;
   }
 }
 

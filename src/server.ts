@@ -1,5 +1,6 @@
 import { WebSocketServer } from 'ws';
 import type { SupervisorRef } from '@hamicek/noex';
+import { RateLimiter, type RateLimiterRef } from '@hamicek/noex';
 import type { ServerConfig } from './config.js';
 import { resolveConfig, type ResolvedServerConfig } from './config.js';
 import {
@@ -28,6 +29,7 @@ export class NoexServer {
   readonly #config: ResolvedServerConfig;
   readonly #wss: InstanceType<typeof WebSocketServer>;
   readonly #supervisorRef: SupervisorRef;
+  readonly #rateLimiterRef: RateLimiterRef | null;
   readonly #startedAt: number;
   #running: boolean;
 
@@ -35,10 +37,12 @@ export class NoexServer {
     config: ResolvedServerConfig,
     wss: InstanceType<typeof WebSocketServer>,
     supervisorRef: SupervisorRef,
+    rateLimiterRef: RateLimiterRef | null,
   ) {
     this.#config = config;
     this.#wss = wss;
     this.#supervisorRef = supervisorRef;
+    this.#rateLimiterRef = rateLimiterRef;
     this.#startedAt = Date.now();
     this.#running = true;
   }
@@ -51,15 +55,26 @@ export class NoexServer {
    */
   static async start(config: ServerConfig): Promise<NoexServer> {
     const resolved = resolveConfig(config);
-    const supervisorRef = await startConnectionSupervisor(resolved);
+
+    let rateLimiterRef: RateLimiterRef | null = null;
+    if (resolved.rateLimit !== null) {
+      rateLimiterRef = await RateLimiter.start({
+        maxRequests: resolved.rateLimit.maxRequests,
+        windowMs: resolved.rateLimit.windowMs,
+        name: `${resolved.name}:rate-limiter`,
+      });
+    }
+
+    const resolvedWithRateLimiter = { ...resolved, rateLimiterRef };
+    const supervisorRef = await startConnectionSupervisor(resolvedWithRateLimiter);
 
     let wss: InstanceType<typeof WebSocketServer>;
     try {
       wss = new WebSocketServer({
-        port: resolved.port,
-        host: resolved.host,
-        path: resolved.path,
-        maxPayload: resolved.maxPayloadBytes,
+        port: resolvedWithRateLimiter.port,
+        host: resolvedWithRateLimiter.host,
+        path: resolvedWithRateLimiter.path,
+        maxPayload: resolvedWithRateLimiter.maxPayloadBytes,
       });
 
       await new Promise<void>((resolve, reject) => {
@@ -68,10 +83,13 @@ export class NoexServer {
       });
     } catch (error) {
       await stopConnectionSupervisor(supervisorRef);
+      if (rateLimiterRef !== null) {
+        await RateLimiter.stop(rateLimiterRef);
+      }
       throw error;
     }
 
-    const server = new NoexServer(resolved, wss, supervisorRef);
+    const server = new NoexServer(resolvedWithRateLimiter, wss, supervisorRef, rateLimiterRef);
 
     wss.on('connection', (ws, request) => {
       const remoteAddress = request.socket.remoteAddress ?? 'unknown';
@@ -104,6 +122,11 @@ export class NoexServer {
     // Stop all existing connections via the supervisor.
     // Each connection's terminate() sends a WS close frame.
     await stopConnectionSupervisor(this.#supervisorRef);
+
+    // Stop the rate limiter if it was started.
+    if (this.#rateLimiterRef !== null) {
+      await RateLimiter.stop(this.#rateLimiterRef);
+    }
 
     // Wait for WSS to finish closing.
     await wssClosed;

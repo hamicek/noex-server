@@ -61,6 +61,7 @@ function createMockConfig(
     maxPayloadBytes: 1_048_576,
     auth: null,
     rateLimit: null,
+    rateLimiterRef: null,
     heartbeat: { intervalMs: 30_000, timeoutMs: 10_000 },
     backpressure: { maxBufferedBytes: 1_048_576, highWaterMark: 0.8 },
     name: 'test-server',
