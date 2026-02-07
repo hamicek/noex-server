@@ -18,6 +18,11 @@ import {
   handleStoreUnsubscribe,
   handleStoreTransaction,
 } from '../proxy/store-proxy.js';
+import {
+  handleRulesRequest,
+  handleRulesSubscribe,
+  handleRulesUnsubscribe,
+} from '../proxy/rules-proxy.js';
 
 // ── State ─────────────────────────────────────────────────────────
 
@@ -289,9 +294,9 @@ async function handleStoreOperation(
 }
 
 async function handleRulesOperation(
-  _request: ClientRequest,
+  request: ClientRequest,
   state: ConnectionState,
-): Promise<never> {
+): Promise<unknown> {
   if (state.config.rules === null) {
     throw new NoexServerError(
       ErrorCode.RULES_NOT_AVAILABLE,
@@ -299,10 +304,25 @@ async function handleRulesOperation(
     );
   }
 
-  throw new NoexServerError(
-    ErrorCode.UNKNOWN_OPERATION,
-    'Rules operations are not yet implemented',
-  );
+  if (request.type === 'rules.subscribe') {
+    return handleRulesSubscribe(
+      request,
+      state.config.rules,
+      state.rulesSubscriptions,
+      (subscriptionId, data) => {
+        sendRaw(
+          state.ws,
+          serializePush(subscriptionId, 'event', data),
+        );
+      },
+    );
+  }
+
+  if (request.type === 'rules.unsubscribe') {
+    return handleRulesUnsubscribe(request, state.rulesSubscriptions);
+  }
+
+  return handleRulesRequest(request, state.config.rules);
 }
 
 async function handleAuthOperation(
