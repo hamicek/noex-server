@@ -27,12 +27,17 @@ import {
 import { handleAuthRequest } from '../auth/auth-handler.js';
 import { checkPermissions } from '../auth/permissions.js';
 import { isBackpressured } from '../lifecycle/backpressure.js';
+import {
+  updateConnectionAuth,
+  updateConnectionSubscriptions,
+} from './connection-registry.js';
 
 // ── State ─────────────────────────────────────────────────────────
 
 export interface ConnectionState {
   readonly ws: WebSocket;
   readonly remoteAddress: string;
+  readonly connectionId: string;
   readonly config: ResolvedServerConfig;
   session: AuthSession | null;
   authenticated: boolean;
@@ -66,6 +71,7 @@ export function createConnectionBehavior(
   ws: WebSocket,
   remoteAddress: string,
   config: ResolvedServerConfig,
+  connectionId: string,
 ): GenServerBehavior<ConnectionState, never, ConnectionCast, never> {
   return {
     init(): ConnectionState {
@@ -77,6 +83,7 @@ export function createConnectionBehavior(
       return {
         ws,
         remoteAddress,
+        connectionId,
         config,
         session: null,
         authenticated: false,
@@ -140,8 +147,9 @@ export async function startConnection(
   ws: WebSocket,
   remoteAddress: string,
   config: ResolvedServerConfig,
+  connectionId = 'test-conn',
 ): Promise<GenServerRef<ConnectionState, never, ConnectionCast, never>> {
-  const behavior = createConnectionBehavior(ws, remoteAddress, config);
+  const behavior = createConnectionBehavior(ws, remoteAddress, config, connectionId);
   const ref = await GenServer.start(behavior);
 
   ws.on('message', (data) => {
@@ -334,7 +342,7 @@ async function handleStoreOperation(
   state: ConnectionState,
 ): Promise<unknown> {
   if (request.type === 'store.subscribe') {
-    return handleStoreSubscribe(
+    const result = await handleStoreSubscribe(
       request,
       state.config.store,
       state.storeSubscriptions,
@@ -345,10 +353,14 @@ async function handleStoreOperation(
         );
       },
     );
+    syncSubscriptionCounts(state);
+    return result;
   }
 
   if (request.type === 'store.unsubscribe') {
-    return handleStoreUnsubscribe(request, state.storeSubscriptions);
+    const result = handleStoreUnsubscribe(request, state.storeSubscriptions);
+    syncSubscriptionCounts(state);
+    return result;
   }
 
   if (request.type === 'store.transaction') {
@@ -370,7 +382,7 @@ async function handleRulesOperation(
   }
 
   if (request.type === 'rules.subscribe') {
-    return handleRulesSubscribe(
+    const result = handleRulesSubscribe(
       request,
       state.config.rules,
       state.rulesSubscriptions,
@@ -381,10 +393,14 @@ async function handleRulesOperation(
         );
       },
     );
+    syncSubscriptionCounts(state);
+    return result;
   }
 
   if (request.type === 'rules.unsubscribe') {
-    return handleRulesUnsubscribe(request, state.rulesSubscriptions);
+    const result = handleRulesUnsubscribe(request, state.rulesSubscriptions);
+    syncSubscriptionCounts(state);
+    return result;
   }
 
   return handleRulesRequest(request, state.config.rules);
@@ -394,10 +410,28 @@ async function handleAuthOperation(
   request: ClientRequest,
   state: ConnectionState,
 ): Promise<unknown> {
-  return handleAuthRequest(request, state, state.config.auth);
+  const result = await handleAuthRequest(request, state, state.config.auth);
+
+  updateConnectionAuth(
+    state.config.connectionRegistry,
+    state.connectionId,
+    state.authenticated,
+    state.session?.userId ?? null,
+  );
+
+  return result;
 }
 
 // ── Internal: Utility ─────────────────────────────────────────────
+
+function syncSubscriptionCounts(state: ConnectionState): void {
+  updateConnectionSubscriptions(
+    state.config.connectionRegistry,
+    state.connectionId,
+    state.storeSubscriptions.size,
+    state.rulesSubscriptions.size,
+  );
+}
 
 function sendRaw(ws: WebSocket, message: string): void {
   if (ws.readyState === WS_OPEN) {

@@ -6,7 +6,9 @@ import {
   type ConnectionState,
   type ConnectionCast,
 } from '../../../src/connection/connection-server.js';
+import { RegistryInstance } from '@hamicek/noex';
 import type { ResolvedServerConfig, AuthConfig } from '../../../src/config.js';
+import type { ConnectionMetadata } from '../../../src/connection/connection-registry.js';
 import type { WebSocket } from 'ws';
 
 // ── Mock WebSocket ────────────────────────────────────────────────
@@ -61,6 +63,10 @@ function createMockConfig(
     auth: null,
     rateLimit: null,
     rateLimiterRef: null,
+    connectionRegistry: new RegistryInstance<ConnectionMetadata>({
+      name: 'test-registry',
+      keys: 'unique',
+    }),
     heartbeat: { intervalMs: 30_000, timeoutMs: 10_000 },
     backpressure: { maxBufferedBytes: 1_048_576, highWaterMark: 0.8 },
     name: 'test-server',
@@ -108,7 +114,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig();
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
 
       expect(ws.sent).toHaveLength(1);
@@ -123,7 +129,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig({ auth: mockAuth() });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
 
       const welcome = parseResponse(ws);
@@ -134,7 +140,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig({ auth: mockAuth({ required: false }) });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
 
       const welcome = parseResponse(ws);
@@ -149,7 +155,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig();
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
     });
@@ -290,7 +296,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig();
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
 
@@ -308,7 +314,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig({ auth: mockAuth() });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
 
@@ -336,7 +342,7 @@ describe('ConnectionServer', () => {
         }),
       });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
 
@@ -355,7 +361,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig({ auth: mockAuth() });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
 
@@ -377,7 +383,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig();
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
     });
@@ -420,7 +426,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig();
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
 
       await GenServer.stop(ref);
@@ -433,7 +439,7 @@ describe('ConnectionServer', () => {
       ws = new MockWebSocket();
       config = createMockConfig();
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
 
       ws.readyState = 3; // Simulate external close
@@ -511,7 +517,7 @@ describe('ConnectionServer', () => {
         backpressure: { maxBufferedBytes: 100, highWaterMark: 0.5 },
       });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
 
@@ -535,7 +541,7 @@ describe('ConnectionServer', () => {
         backpressure: { maxBufferedBytes: 100, highWaterMark: 0.5 },
       });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
 
@@ -561,7 +567,7 @@ describe('ConnectionServer', () => {
         backpressure: { maxBufferedBytes: 100, highWaterMark: 0.5 },
       });
       ref = await GenServer.start(
-        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config, 'test-conn'),
       );
       ws.clearSent();
 

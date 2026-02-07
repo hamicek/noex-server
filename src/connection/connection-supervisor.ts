@@ -8,6 +8,7 @@ import {
   type ConnectionCast,
 } from './connection-server.js';
 import { startHeartbeat } from '../lifecycle/heartbeat.js';
+import { nextConnectionId, registerConnection } from './connection-registry.js';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -29,7 +30,8 @@ export async function startConnectionSupervisor(
       start: async (...args: unknown[]) => {
         const ws = args[0] as WebSocket;
         const remoteAddress = args[1] as string;
-        const behavior = createConnectionBehavior(ws, remoteAddress, config);
+        const connectionId = args[2] as string;
+        const behavior = createConnectionBehavior(ws, remoteAddress, config, connectionId);
         return GenServer.start(behavior);
       },
       restart: 'temporary',
@@ -49,11 +51,16 @@ export async function addConnection(
   ws: WebSocket,
   remoteAddress: string,
   heartbeatIntervalMs: number,
+  config: ResolvedServerConfig,
 ): Promise<ConnectionRef> {
+  const connectionId = nextConnectionId();
   const ref = await Supervisor.startChild(supervisorRef, [
     ws,
     remoteAddress,
+    connectionId,
   ]) as ConnectionRef;
+
+  registerConnection(config.connectionRegistry, connectionId, ref, remoteAddress);
 
   ws.on('message', (data) => {
     try {

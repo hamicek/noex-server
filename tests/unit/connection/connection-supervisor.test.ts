@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { GenServer, Supervisor } from '@hamicek/noex';
+import { GenServer, Supervisor, RegistryInstance } from '@hamicek/noex';
 import type { SupervisorRef } from '@hamicek/noex';
 import {
   startConnectionSupervisor,
@@ -9,6 +9,7 @@ import {
   type ConnectionRef,
 } from '../../../src/connection/connection-supervisor.js';
 import type { ResolvedServerConfig } from '../../../src/config.js';
+import type { ConnectionMetadata } from '../../../src/connection/connection-registry.js';
 import type { WebSocket } from 'ws';
 
 // ── Mock WebSocket ────────────────────────────────────────────────
@@ -62,6 +63,10 @@ function createMockConfig(
     auth: null,
     rateLimit: null,
     rateLimiterRef: null,
+    connectionRegistry: new RegistryInstance<ConnectionMetadata>({
+      name: 'test-registry',
+      keys: 'unique',
+    }),
     heartbeat: { intervalMs: 30_000, timeoutMs: 10_000 },
     backpressure: { maxBufferedBytes: 1_048_576, highWaterMark: 0.8 },
     name: 'test-server',
@@ -119,7 +124,7 @@ describe('ConnectionSupervisor', () => {
       supervisorRef = await startConnectionSupervisor(config);
 
       const ws = new MockWebSocket();
-      const ref = await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000);
+      const ref = await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000, config);
 
       expect(GenServer.isRunning(ref)).toBe(true);
       expect(getConnectionCount(supervisorRef)).toBe(1);
@@ -130,7 +135,7 @@ describe('ConnectionSupervisor', () => {
       supervisorRef = await startConnectionSupervisor(config);
 
       const ws = new MockWebSocket();
-      await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000);
+      await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000, config);
 
       expect(ws.sent).toHaveLength(1);
       const welcome = parseResponse(ws);
@@ -147,9 +152,9 @@ describe('ConnectionSupervisor', () => {
       const ws2 = new MockWebSocket();
       const ws3 = new MockWebSocket();
 
-      const ref1 = await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000);
-      const ref2 = await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000);
-      const ref3 = await addConnection(supervisorRef, asWs(ws3), '10.0.0.3', 30_000);
+      const ref1 = await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000, config);
+      const ref2 = await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000, config);
+      const ref3 = await addConnection(supervisorRef, asWs(ws3), '10.0.0.3', 30_000, config);
 
       expect(getConnectionCount(supervisorRef)).toBe(3);
       expect(GenServer.isRunning(ref1)).toBe(true);
@@ -162,7 +167,7 @@ describe('ConnectionSupervisor', () => {
       supervisorRef = await startConnectionSupervisor(config);
 
       const ws = new MockWebSocket();
-      await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000);
+      await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000, config);
       ws.clearSent();
 
       ws.simulateEvent('message', Buffer.from('{"id":1,"type":"store.all"}'));
@@ -179,7 +184,7 @@ describe('ConnectionSupervisor', () => {
       supervisorRef = await startConnectionSupervisor(config);
 
       const ws = new MockWebSocket();
-      const ref = await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000);
+      const ref = await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000, config);
 
       expect(GenServer.isRunning(ref)).toBe(true);
 
@@ -195,8 +200,8 @@ describe('ConnectionSupervisor', () => {
 
       const ws1 = new MockWebSocket();
       const ws2 = new MockWebSocket();
-      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000);
-      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000);
+      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000, config);
+      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000, config);
 
       expect(getConnectionCount(supervisorRef)).toBe(2);
 
@@ -226,8 +231,8 @@ describe('ConnectionSupervisor', () => {
 
       const ws1 = new MockWebSocket();
       const ws2 = new MockWebSocket();
-      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000);
-      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000);
+      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000, config);
+      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000, config);
 
       await stopConnectionSupervisor(supervisorRef);
 
@@ -242,8 +247,8 @@ describe('ConnectionSupervisor', () => {
 
       const ws1 = new MockWebSocket();
       const ws2 = new MockWebSocket();
-      const ref1 = await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000);
-      const ref2 = await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000);
+      const ref1 = await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000, config);
+      const ref2 = await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000, config);
 
       await stopConnectionSupervisor(supervisorRef);
 
@@ -261,7 +266,7 @@ describe('ConnectionSupervisor', () => {
       supervisorRef = await startConnectionSupervisor(config);
 
       const ws = new MockWebSocket();
-      const ref = await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000);
+      const ref = await addConnection(supervisorRef, asWs(ws), '127.0.0.1', 30_000, config);
 
       // Force-stop the GenServer (simulating a crash)
       await GenServer.stop(ref, 'crash');
@@ -282,8 +287,8 @@ describe('ConnectionSupervisor', () => {
 
       const ws1 = new MockWebSocket();
       const ws2 = new MockWebSocket();
-      const ref1 = await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000);
-      const ref2 = await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000);
+      const ref1 = await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000, config);
+      const ref2 = await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000, config);
 
       // Crash connection 1
       await GenServer.stop(ref1, 'crash');
@@ -299,8 +304,8 @@ describe('ConnectionSupervisor', () => {
 
       const ws1 = new MockWebSocket();
       const ws2 = new MockWebSocket();
-      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000);
-      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000);
+      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000, config);
+      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000, config);
 
       expect(ws1.sent).toHaveLength(1);
       expect(ws2.sent).toHaveLength(1);
@@ -314,8 +319,8 @@ describe('ConnectionSupervisor', () => {
 
       const ws1 = new MockWebSocket();
       const ws2 = new MockWebSocket();
-      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000);
-      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000);
+      await addConnection(supervisorRef, asWs(ws1), '10.0.0.1', 30_000, config);
+      await addConnection(supervisorRef, asWs(ws2), '10.0.0.2', 30_000, config);
       ws1.clearSent();
       ws2.clearSent();
 

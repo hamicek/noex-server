@@ -11,6 +11,13 @@ import {
   getConnectionCount,
   stopConnectionSupervisor,
 } from './connection/connection-supervisor.js';
+import {
+  createConnectionRegistry,
+  closeConnectionRegistry,
+  getConnections as getRegistryConnections,
+  type ConnectionInfo,
+  type ConnectionRegistry,
+} from './connection/connection-registry.js';
 
 // ── Stats ─────────────────────────────────────────────────────────
 
@@ -37,6 +44,7 @@ export class NoexServer {
   readonly #wss: InstanceType<typeof WebSocketServer>;
   readonly #supervisorRef: SupervisorRef;
   readonly #rateLimiterRef: RateLimiterRef | null;
+  readonly #connectionRegistry: ConnectionRegistry;
   readonly #startedAt: number;
   #running: boolean;
 
@@ -46,12 +54,14 @@ export class NoexServer {
     wss: InstanceType<typeof WebSocketServer>,
     supervisorRef: SupervisorRef,
     rateLimiterRef: RateLimiterRef | null,
+    connectionRegistry: ConnectionRegistry,
   ) {
     this.#config = config;
     this.#httpServer = httpServer;
     this.#wss = wss;
     this.#supervisorRef = supervisorRef;
     this.#rateLimiterRef = rateLimiterRef;
+    this.#connectionRegistry = connectionRegistry;
     this.#startedAt = Date.now();
     this.#running = true;
   }
@@ -75,8 +85,10 @@ export class NoexServer {
       });
     }
 
-    const resolvedWithRateLimiter = { ...resolved, rateLimiterRef };
-    const supervisorRef = await startConnectionSupervisor(resolvedWithRateLimiter);
+    const connectionRegistry = await createConnectionRegistry(resolved.name);
+
+    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry };
+    const supervisorRef = await startConnectionSupervisor(resolvedFull);
 
     let httpServer: HttpServer;
     let wss: InstanceType<typeof WebSocketServer>;
@@ -84,7 +96,7 @@ export class NoexServer {
       httpServer = createServer();
       wss = new WebSocketServer({
         noServer: true,
-        maxPayload: resolvedWithRateLimiter.maxPayloadBytes,
+        maxPayload: resolvedFull.maxPayloadBytes,
       });
 
       httpServer.on('upgrade', (request, socket, head) => {
@@ -93,7 +105,7 @@ export class NoexServer {
           `http://${request.headers['host'] ?? 'localhost'}`,
         ).pathname;
 
-        if (pathname !== resolvedWithRateLimiter.path) {
+        if (pathname !== resolvedFull.path) {
           socket.destroy();
           return;
         }
@@ -106,22 +118,24 @@ export class NoexServer {
       await new Promise<void>((resolve, reject) => {
         httpServer.once('listening', resolve);
         httpServer.once('error', reject);
-        httpServer.listen(resolvedWithRateLimiter.port, resolvedWithRateLimiter.host);
+        httpServer.listen(resolvedFull.port, resolvedFull.host);
       });
     } catch (error) {
       await stopConnectionSupervisor(supervisorRef);
       if (rateLimiterRef !== null) {
         await RateLimiter.stop(rateLimiterRef);
       }
+      await closeConnectionRegistry(connectionRegistry);
       throw error;
     }
 
     const server = new NoexServer(
-      resolvedWithRateLimiter,
+      resolvedFull,
       httpServer,
       wss,
       supervisorRef,
       rateLimiterRef,
+      connectionRegistry,
     );
 
     wss.on('connection', (ws, request) => {
@@ -134,7 +148,8 @@ export class NoexServer {
         supervisorRef,
         ws,
         remoteAddress,
-        resolvedWithRateLimiter.heartbeat.intervalMs,
+        resolvedFull.heartbeat.intervalMs,
+        resolvedFull,
       );
     });
 
@@ -199,7 +214,10 @@ export class NoexServer {
       await RateLimiter.stop(this.#rateLimiterRef);
     }
 
-    // 5. Wait for the HTTP server to finish closing.
+    // 5. Close the connection registry.
+    await closeConnectionRegistry(this.#connectionRegistry);
+
+    // 6. Wait for the HTTP server to finish closing.
     await httpClosed;
   }
 
@@ -220,6 +238,11 @@ export class NoexServer {
   /** Whether the server is currently running. */
   get isRunning(): boolean {
     return this.#running;
+  }
+
+  /** Returns information about all active connections. */
+  getConnections(): ConnectionInfo[] {
+    return getRegistryConnections(this.#connectionRegistry);
   }
 
   /** Returns server statistics. */

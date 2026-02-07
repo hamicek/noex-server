@@ -1,6 +1,7 @@
 import type { RateLimiterRef } from '@hamicek/noex';
 import type { Store } from '@hamicek/noex-store';
 import type { RuleEngine } from '@hamicek/noex-rules';
+import type { ConnectionRegistry } from './connection/connection-registry.js';
 
 // ── Auth ──────────────────────────────────────────────────────────
 
@@ -110,6 +111,7 @@ export interface ResolvedServerConfig {
   readonly auth: AuthConfig | null;
   readonly rateLimit: RateLimitConfig | null;
   readonly rateLimiterRef: RateLimiterRef | null;
+  readonly connectionRegistry: ConnectionRegistry;
   readonly heartbeat: HeartbeatConfig;
   readonly backpressure: BackpressureConfig;
   readonly name: string;
@@ -128,6 +130,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     auth: config.auth ?? null,
     rateLimit: config.rateLimit ?? null,
     rateLimiterRef: null,
+    connectionRegistry: null as unknown as ConnectionRegistry,
     heartbeat: config.heartbeat ?? DEFAULT_HEARTBEAT,
     backpressure: config.backpressure ?? DEFAULT_BACKPRESSURE,
     name: config.name ?? DEFAULT_NAME,
