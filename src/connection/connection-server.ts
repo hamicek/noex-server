@@ -342,11 +342,26 @@ async function routeRequest(
 
 // ── Internal: Store Operations ────────────────────────────────────
 
+function totalSubscriptions(state: ConnectionState): number {
+  return state.storeSubscriptions.size + state.rulesSubscriptions.size;
+}
+
+function checkSubscriptionLimit(state: ConnectionState): void {
+  const max = state.config.connectionLimits.maxSubscriptionsPerConnection;
+  if (totalSubscriptions(state) >= max) {
+    throw new NoexServerError(
+      ErrorCode.RATE_LIMITED,
+      `Subscription limit reached (max ${max} per connection)`,
+    );
+  }
+}
+
 async function handleStoreOperation(
   request: ClientRequest,
   state: ConnectionState,
 ): Promise<unknown> {
   if (request.type === 'store.subscribe') {
+    checkSubscriptionLimit(state);
     const result = await handleStoreSubscribe(
       request,
       state.config.store,
@@ -387,6 +402,7 @@ async function handleRulesOperation(
   }
 
   if (request.type === 'rules.subscribe') {
+    checkSubscriptionLimit(state);
     const result = handleRulesSubscribe(
       request,
       state.config.rules,
@@ -490,6 +506,12 @@ function syncSubscriptionCounts(state: ConnectionState): void {
 
 function sendRaw(ws: WebSocket, message: string): void {
   if (ws.readyState === WS_OPEN) {
-    ws.send(message);
+    try {
+      ws.send(message);
+    } catch {
+      // Send can fail if the socket is in a transitional state or the
+      // write buffer overflows. Swallowing the error is safe: the client
+      // will either reconnect or the heartbeat will detect the dead link.
+    }
   }
 }

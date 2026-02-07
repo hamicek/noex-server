@@ -285,7 +285,7 @@ describe('Integration: Auth', () => {
   // ── Session expiration ─────────────────────────────────────────
 
   describe('session expiration', () => {
-    it('rejects operations when session has expired', async () => {
+    it('rejects login with an already-expired token', async () => {
       const expiredSession: AuthSession = {
         userId: 'user-1',
         roles: ['user'],
@@ -301,13 +301,54 @@ describe('Integration: Auth', () => {
       const { ws } = await connectClient(server!.port);
       clients.push(ws);
 
-      await sendRequest(ws, { type: 'auth.login', token: 'expired' });
+      const loginResp = await sendRequest(ws, {
+        type: 'auth.login',
+        token: 'expired',
+      });
+
+      expect(loginResp['type']).toBe('error');
+      expect(loginResp['code']).toBe('UNAUTHORIZED');
+      expect(loginResp['message']).toBe('Token has expired');
+
+      // Client remains unauthenticated — subsequent request gets auth required
+      const storeResp = await sendRequest(ws, {
+        type: 'store.all',
+        bucket: 'users',
+      });
+      expect(storeResp['code']).toBe('UNAUTHORIZED');
+      expect(storeResp['message']).toBe('Authentication required');
+    });
+
+    it('detects session expiry between operations', async () => {
+      // Session that expires very soon
+      const shortLived: AuthSession = {
+        userId: 'user-1',
+        roles: ['user'],
+        expiresAt: Date.now() + 200,
+      };
+
+      await setup(
+        createAuth({
+          validate: async (token) =>
+            token === 'short-lived' ? shortLived : null,
+        }),
+      );
+      const { ws } = await connectClient(server!.port);
+      clients.push(ws);
+
+      const loginResp = await sendRequest(ws, {
+        type: 'auth.login',
+        token: 'short-lived',
+      });
+      expect(loginResp['type']).toBe('result');
+
+      // Wait for session to expire
+      await flush(300);
 
       const resp = await sendRequest(ws, {
         type: 'store.all',
         bucket: 'users',
       });
-
       expect(resp['type']).toBe('error');
       expect(resp['code']).toBe('UNAUTHORIZED');
       expect(resp['message']).toBe('Session expired');
@@ -332,13 +373,14 @@ describe('Integration: Auth', () => {
       const { ws } = await connectClient(server!.port);
       clients.push(ws);
 
-      await sendRequest(ws, { type: 'auth.login', token: 'expired' });
-      const expired = await sendRequest(ws, {
-        type: 'store.all',
-        bucket: 'users',
+      // Expired login fails
+      const loginResp = await sendRequest(ws, {
+        type: 'auth.login',
+        token: 'expired',
       });
-      expect(expired['code']).toBe('UNAUTHORIZED');
+      expect(loginResp['code']).toBe('UNAUTHORIZED');
 
+      // Fresh login with valid token works
       await sendRequest(ws, { type: 'auth.login', token: 'valid-user' });
       const ok = await sendRequest(ws, {
         type: 'store.all',

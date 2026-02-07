@@ -44,6 +44,11 @@ export interface BackpressureConfig {
   readonly highWaterMark: number;
 }
 
+export interface ConnectionLimitsConfig {
+  /** Maximum number of active subscriptions per single connection. Default: 100. */
+  readonly maxSubscriptionsPerConnection: number;
+}
+
 // ── Defaults ──────────────────────────────────────────────────────
 
 export const DEFAULT_PORT = 8080;
@@ -60,6 +65,10 @@ export const DEFAULT_HEARTBEAT: HeartbeatConfig = {
 export const DEFAULT_BACKPRESSURE: BackpressureConfig = {
   maxBufferedBytes: 1_048_576, // 1 MB
   highWaterMark: 0.8,
+};
+
+export const DEFAULT_CONNECTION_LIMITS: ConnectionLimitsConfig = {
+  maxSubscriptionsPerConnection: 100,
 };
 
 // ── Server Config (user-facing) ──────────────────────────────────
@@ -95,6 +104,9 @@ export interface ServerConfig {
   /** Write buffer backpressure configuration. Default: 1 MB limit, 0.8 high water mark. */
   readonly backpressure?: BackpressureConfig;
 
+  /** Per-connection limits. */
+  readonly connectionLimits?: Partial<ConnectionLimitsConfig>;
+
   /** Server name used for registry and logging. Default: 'noex-server'. */
   readonly name?: string;
 }
@@ -114,6 +126,7 @@ export interface ResolvedServerConfig {
   readonly connectionRegistry: ConnectionRegistry;
   readonly heartbeat: HeartbeatConfig;
   readonly backpressure: BackpressureConfig;
+  readonly connectionLimits: ConnectionLimitsConfig;
   readonly name: string;
 }
 
@@ -133,6 +146,10 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     connectionRegistry: null as unknown as ConnectionRegistry,
     heartbeat: config.heartbeat ?? DEFAULT_HEARTBEAT,
     backpressure: config.backpressure ?? DEFAULT_BACKPRESSURE,
+    connectionLimits: {
+      ...DEFAULT_CONNECTION_LIMITS,
+      ...config.connectionLimits,
+    },
     name: config.name ?? DEFAULT_NAME,
   };
 }

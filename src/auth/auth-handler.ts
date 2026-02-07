@@ -62,6 +62,16 @@ async function handleLogin(
     );
   }
 
+  if (
+    session.expiresAt !== undefined &&
+    session.expiresAt < Date.now()
+  ) {
+    throw new NoexServerError(
+      ErrorCode.UNAUTHORIZED,
+      'Token has expired',
+    );
+  }
+
   state.session = session;
   state.authenticated = true;
 

@@ -14,6 +14,7 @@ export type {
   RateLimitConfig,
   HeartbeatConfig,
   BackpressureConfig,
+  ConnectionLimitsConfig,
 } from './config.js';
 
 // ── Errors ───────────────────────────────────────────────────────

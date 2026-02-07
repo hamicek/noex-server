@@ -126,6 +126,45 @@ describe('auth-handler', () => {
 
       expect(result).toMatchObject({ expiresAt: null });
     });
+
+    it('rejects login with an already-expired token', async () => {
+      const expiredSession: AuthSession = {
+        userId: 'user-1',
+        roles: ['user'],
+        expiresAt: Date.now() - 10_000,
+      };
+      const state = createState();
+      const auth = createAuth({ validate: async () => expiredSession });
+
+      await expect(
+        handleAuthRequest(req('auth.login', { token: 'expired' }), state, auth),
+      ).rejects.toMatchObject({
+        code: 'UNAUTHORIZED',
+        message: 'Token has expired',
+      });
+
+      expect(state.authenticated).toBe(false);
+      expect(state.session).toBeNull();
+    });
+
+    it('accepts login with a far-future expiration', async () => {
+      const futureSession: AuthSession = {
+        userId: 'user-1',
+        roles: ['user'],
+        expiresAt: Date.now() + 3_600_000,
+      };
+      const state = createState();
+      const auth = createAuth({ validate: async () => futureSession });
+
+      const result = await handleAuthRequest(
+        req('auth.login', { token: 'valid' }),
+        state,
+        auth,
+      );
+
+      expect(result).toMatchObject({ userId: 'user-1' });
+      expect(state.authenticated).toBe(true);
+    });
   });
 
   // ── auth.logout ────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import {
   DEFAULT_NAME,
   DEFAULT_HEARTBEAT,
   DEFAULT_BACKPRESSURE,
+  DEFAULT_CONNECTION_LIMITS,
 } from '../../src/config.js';
 import type {
   AuthConfig,
@@ -59,6 +60,12 @@ describe('config defaults', () => {
       highWaterMark: 0.8,
     });
   });
+
+  it('has correct default connection limits', () => {
+    expect(DEFAULT_CONNECTION_LIMITS).toEqual({
+      maxSubscriptionsPerConnection: 100,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -84,6 +91,7 @@ describe('resolveConfig', () => {
       connectionRegistry: null,
       heartbeat: { intervalMs: 30_000, timeoutMs: 10_000 },
       backpressure: { maxBufferedBytes: 1_048_576, highWaterMark: 0.8 },
+      connectionLimits: { maxSubscriptionsPerConnection: 100 },
       name: 'noex-server',
     });
   });
@@ -202,6 +210,23 @@ describe('resolveConfig', () => {
     };
     const resolved = resolveConfig({ store: mockStore, backpressure });
     expect(resolved.backpressure).toBe(backpressure);
+  });
+
+  // ── Connection Limits ───────────────────────────────────────
+
+  it('uses default connection limits when not provided', () => {
+    const resolved = resolveConfig({ store: mockStore });
+    expect(resolved.connectionLimits).toEqual({
+      maxSubscriptionsPerConnection: 100,
+    });
+  });
+
+  it('preserves custom maxSubscriptionsPerConnection', () => {
+    const resolved = resolveConfig({
+      store: mockStore,
+      connectionLimits: { maxSubscriptionsPerConnection: 50 },
+    });
+    expect(resolved.connectionLimits.maxSubscriptionsPerConnection).toBe(50);
   });
 
   // ── Name ──────────────────────────────────────────────────────

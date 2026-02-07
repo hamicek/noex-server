@@ -69,6 +69,7 @@ function createMockConfig(
     }),
     heartbeat: { intervalMs: 30_000, timeoutMs: 10_000 },
     backpressure: { maxBufferedBytes: 1_048_576, highWaterMark: 0.8 },
+    connectionLimits: { maxSubscriptionsPerConnection: 100 },
     name: 'test-server',
     ...overrides,
   };
