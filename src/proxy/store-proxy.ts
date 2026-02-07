@@ -352,3 +352,137 @@ export function handleStoreUnsubscribe(
   subscriptions.delete(subscriptionId);
   return { unsubscribed: true };
 }
+
+// ── Transaction operations ───────────────────────────────────────
+
+interface TransactionOp {
+  readonly op: string;
+  readonly bucket: string;
+  readonly key?: unknown;
+  readonly data?: Record<string, unknown>;
+  readonly filter?: Record<string, unknown>;
+}
+
+const VALID_TX_OPS = new Set([
+  'get', 'insert', 'update', 'delete', 'where', 'findOne', 'count',
+]);
+
+function validateOperations(operations: unknown): TransactionOp[] {
+  if (!Array.isArray(operations)) {
+    throw new NoexServerError(
+      ErrorCode.VALIDATION_ERROR,
+      'Missing or invalid "operations": expected array',
+    );
+  }
+
+  if (operations.length === 0) {
+    throw new NoexServerError(
+      ErrorCode.VALIDATION_ERROR,
+      '"operations" must contain at least one operation',
+    );
+  }
+
+  const result: TransactionOp[] = [];
+
+  for (let i = 0; i < operations.length; i++) {
+    const raw = operations[i] as Record<string, unknown> | null;
+
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `operations[${i}]: expected object`,
+      );
+    }
+
+    const op = raw['op'];
+    if (typeof op !== 'string' || !VALID_TX_OPS.has(op)) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `operations[${i}]: invalid "op" — expected one of: ${[...VALID_TX_OPS].join(', ')}`,
+      );
+    }
+
+    const bucket = raw['bucket'];
+    if (typeof bucket !== 'string' || bucket.length === 0) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `operations[${i}]: missing or invalid "bucket"`,
+      );
+    }
+
+    if ((op === 'get' || op === 'update' || op === 'delete') && (raw['key'] === undefined || raw['key'] === null)) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `operations[${i}]: "${op}" requires "key"`,
+      );
+    }
+
+    if ((op === 'insert' || op === 'update') && (typeof raw['data'] !== 'object' || raw['data'] === null || Array.isArray(raw['data']))) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `operations[${i}]: "${op}" requires "data" object`,
+      );
+    }
+
+    if ((op === 'where' || op === 'findOne') && (typeof raw['filter'] !== 'object' || raw['filter'] === null || Array.isArray(raw['filter']))) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `operations[${i}]: "${op}" requires "filter" object`,
+      );
+    }
+
+    result.push(raw as unknown as TransactionOp);
+  }
+
+  return result;
+}
+
+export async function handleStoreTransaction(
+  request: ClientRequest,
+  store: Store,
+): Promise<{ results: Array<{ index: number; data: unknown }> }> {
+  const operations = validateOperations(request['operations']);
+
+  try {
+    return await store.transaction(async (tx) => {
+      const results: Array<{ index: number; data: unknown }> = [];
+
+      for (let i = 0; i < operations.length; i++) {
+        const op = operations[i]!;
+        const bucket = await tx.bucket(op.bucket);
+        let data: unknown;
+
+        switch (op.op) {
+          case 'get':
+            data = (await bucket.get(op.key)) ?? null;
+            break;
+          case 'insert':
+            data = await bucket.insert(op.data!);
+            break;
+          case 'update':
+            data = await bucket.update(op.key, op.data!);
+            break;
+          case 'delete':
+            await bucket.delete(op.key);
+            data = { deleted: true };
+            break;
+          case 'where':
+            data = await bucket.where(op.filter!);
+            break;
+          case 'findOne':
+            data = (await bucket.findOne(op.filter!)) ?? null;
+            break;
+          case 'count':
+            data = await bucket.count(op.filter);
+            break;
+        }
+
+        results.push({ index: i, data });
+      }
+
+      return { results };
+    });
+  } catch (error) {
+    throw mapStoreError(error);
+  }
+}

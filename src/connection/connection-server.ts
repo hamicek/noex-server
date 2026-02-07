@@ -16,6 +16,7 @@ import {
   handleStoreRequest,
   handleStoreSubscribe,
   handleStoreUnsubscribe,
+  handleStoreTransaction,
 } from '../proxy/store-proxy.js';
 
 // ── State ─────────────────────────────────────────────────────────
@@ -278,6 +279,10 @@ async function handleStoreOperation(
 
   if (request.type === 'store.unsubscribe') {
     return handleStoreUnsubscribe(request, state.storeSubscriptions);
+  }
+
+  if (request.type === 'store.transaction') {
+    return handleStoreTransaction(request, state.config.store);
   }
 
   return handleStoreRequest(request, state.config.store);
