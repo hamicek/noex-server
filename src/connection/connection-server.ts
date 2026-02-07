@@ -23,6 +23,8 @@ import {
   handleRulesSubscribe,
   handleRulesUnsubscribe,
 } from '../proxy/rules-proxy.js';
+import { handleAuthRequest } from '../auth/auth-handler.js';
+import { checkPermissions } from '../auth/permissions.js';
 
 // ── State ─────────────────────────────────────────────────────────
 
@@ -180,7 +182,7 @@ async function handleWsMessage(
   const request = parsed.request;
 
   try {
-    checkAuth(state, request.type);
+    checkAuth(state, request);
     const result = await routeRequest(request, state);
     sendRaw(state.ws, serializeResult(request.id, result));
   } catch (error) {
@@ -221,18 +223,35 @@ function handlePush(
 
 // ── Internal: Auth Check ──────────────────────────────────────────
 
-function checkAuth(state: ConnectionState, requestType: string): void {
-  if (requestType.startsWith('auth.') || requestType === 'ping') return;
+function checkAuth(state: ConnectionState, request: ClientRequest): void {
+  const { type } = request;
 
-  if (
-    state.config.auth !== null &&
-    state.config.auth.required !== false &&
-    !state.authenticated
-  ) {
+  if (type.startsWith('auth.') || type === 'ping') return;
+
+  const { auth } = state.config;
+
+  if (auth !== null && auth.required !== false && !state.authenticated) {
     throw new NoexServerError(
       ErrorCode.UNAUTHORIZED,
       'Authentication required',
     );
+  }
+
+  if (
+    state.session !== null &&
+    state.session.expiresAt !== undefined &&
+    state.session.expiresAt < Date.now()
+  ) {
+    state.session = null;
+    state.authenticated = false;
+    throw new NoexServerError(
+      ErrorCode.UNAUTHORIZED,
+      'Session expired',
+    );
+  }
+
+  if (auth?.permissions !== undefined && state.session !== null) {
+    checkPermissions(state.session, request, auth.permissions);
   }
 }
 
@@ -326,13 +345,10 @@ async function handleRulesOperation(
 }
 
 async function handleAuthOperation(
-  _request: ClientRequest,
-  _state: ConnectionState,
-): Promise<never> {
-  throw new NoexServerError(
-    ErrorCode.UNKNOWN_OPERATION,
-    'Auth operations are not yet implemented',
-  );
+  request: ClientRequest,
+  state: ConnectionState,
+): Promise<unknown> {
+  return handleAuthRequest(request, state, state.config.auth);
 }
 
 // ── Internal: Utility ─────────────────────────────────────────────

@@ -224,7 +224,7 @@ describe('ConnectionServer', () => {
       expect(response['code']).toBe('RULES_NOT_AVAILABLE');
     });
 
-    it('responds with UNKNOWN_OPERATION for auth operations', async () => {
+    it('responds with UNKNOWN_OPERATION for auth.login when auth not configured', async () => {
       GenServer.cast(ref!, {
         type: 'ws_message',
         raw: '{"id":3,"type":"auth.login","token":"abc"}',
@@ -325,7 +325,14 @@ describe('ConnectionServer', () => {
 
     it('allows auth.login even when not authenticated', async () => {
       ws = new MockWebSocket();
-      config = createMockConfig({ auth: mockAuth() });
+      config = createMockConfig({
+        auth: mockAuth({
+          validate: async () => ({
+            userId: 'user-1',
+            roles: ['user'],
+          }),
+        }),
+      });
       ref = await GenServer.start(
         createConnectionBehavior(asWs(ws), '127.0.0.1', config),
       );
@@ -338,6 +345,7 @@ describe('ConnectionServer', () => {
       await flush();
 
       const response = parseResponse(ws);
+      expect(response['type']).toBe('result');
       expect(response['code']).not.toBe('UNAUTHORIZED');
     });
 
