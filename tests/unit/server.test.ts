@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { WebSocket } from 'ws';
 import { Store } from '@hamicek/noex-store';
-import { NoexServer, type ServerStats } from '../../src/server.js';
+import { NoexServer, type ServerStats, type ConnectionsStats } from '../../src/server.js';
 
 // ── Helpers ──────────────────────────────────────────────────────
 
@@ -428,6 +428,31 @@ describe('NoexServer', () => {
       expect(stats.authEnabled).toBe(false);
       expect(stats.rateLimitEnabled).toBe(false);
       expect(stats.rulesEnabled).toBe(false);
+      expect(stats.rules).toBeNull();
+    });
+
+    it('includes connections aggregate with zero values when no connections', async () => {
+      store = await Store.start({ name: `test-${++storeCounter}` });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+
+      const stats = await server.getStats();
+      const conns: ConnectionsStats = stats.connections;
+
+      expect(conns.active).toBe(0);
+      expect(conns.authenticated).toBe(0);
+      expect(conns.totalStoreSubscriptions).toBe(0);
+      expect(conns.totalRulesSubscriptions).toBe(0);
+    });
+
+    it('includes store stats object', async () => {
+      store = await Store.start({ name: `test-${++storeCounter}` });
+      server = await NoexServer.start({ store, port: 0, host: '127.0.0.1' });
+
+      const stats = await server.getStats();
+
+      expect(stats.store).toBeDefined();
+      expect(typeof stats.store).toBe('object');
+      expect(stats.store).not.toBeNull();
     });
 
     it('reflects custom server name', async () => {

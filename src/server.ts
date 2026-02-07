@@ -21,6 +21,13 @@ import {
 
 // ── Stats ─────────────────────────────────────────────────────────
 
+export interface ConnectionsStats {
+  readonly active: number;
+  readonly authenticated: number;
+  readonly totalStoreSubscriptions: number;
+  readonly totalRulesSubscriptions: number;
+}
+
 export interface ServerStats {
   readonly name: string;
   readonly port: number;
@@ -30,6 +37,9 @@ export interface ServerStats {
   readonly authEnabled: boolean;
   readonly rateLimitEnabled: boolean;
   readonly rulesEnabled: boolean;
+  readonly connections: ConnectionsStats;
+  readonly store: unknown;
+  readonly rules: unknown;
 }
 
 // ── WebSocket readyState constants ────────────────────────────────
@@ -247,6 +257,11 @@ export class NoexServer {
 
   /** Returns server statistics. */
   async getStats(): Promise<ServerStats> {
+    const conns = this.getConnections();
+    const storeStats = await this.#config.store.getStats();
+    const rulesStats =
+      this.#config.rules !== null ? this.#config.rules.getStats() : null;
+
     return {
       name: this.#config.name,
       port: this.port,
@@ -256,6 +271,30 @@ export class NoexServer {
       authEnabled: this.#config.auth !== null,
       rateLimitEnabled: this.#config.rateLimit !== null,
       rulesEnabled: this.#config.rules !== null,
+      connections: aggregateConnections(conns),
+      store: storeStats,
+      rules: rulesStats,
     };
   }
+}
+
+// ── Helpers ──────────────────────────────────────────────────────
+
+function aggregateConnections(conns: ConnectionInfo[]): ConnectionsStats {
+  let authenticated = 0;
+  let totalStoreSubscriptions = 0;
+  let totalRulesSubscriptions = 0;
+
+  for (const c of conns) {
+    if (c.authenticated) authenticated++;
+    totalStoreSubscriptions += c.storeSubscriptionCount;
+    totalRulesSubscriptions += c.rulesSubscriptionCount;
+  }
+
+  return {
+    active: conns.length,
+    authenticated,
+    totalStoreSubscriptions,
+    totalRulesSubscriptions,
+  };
 }

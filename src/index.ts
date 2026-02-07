@@ -1,7 +1,7 @@
 // ── Main ─────────────────────────────────────────────────────────
 
 export { NoexServer } from './server.js';
-export type { ServerStats } from './server.js';
+export type { ServerStats, ConnectionsStats } from './server.js';
 export type { ConnectionInfo, ConnectionMetadata } from './connection/connection-registry.js';
 
 // ── Configuration ────────────────────────────────────────────────

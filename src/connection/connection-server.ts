@@ -30,6 +30,7 @@ import { isBackpressured } from '../lifecycle/backpressure.js';
 import {
   updateConnectionAuth,
   updateConnectionSubscriptions,
+  getConnections as getRegistryConnections,
 } from './connection-registry.js';
 
 // ── State ─────────────────────────────────────────────────────────
@@ -329,6 +330,10 @@ async function routeRequest(
     return handleAuthOperation(request, state);
   }
 
+  if (type.startsWith('server.')) {
+    return handleServerOperation(request, state);
+  }
+
   throw new NoexServerError(
     ErrorCode.UNKNOWN_OPERATION,
     `Unknown operation "${type}"`,
@@ -420,6 +425,56 @@ async function handleAuthOperation(
   );
 
   return result;
+}
+
+// ── Internal: Server Operations ────────────────────────────────────
+
+async function handleServerOperation(
+  request: ClientRequest,
+  state: ConnectionState,
+): Promise<unknown> {
+  switch (request.type) {
+    case 'server.stats': {
+      const conns = getRegistryConnections(state.config.connectionRegistry);
+      const storeStats = await state.config.store.getStats();
+      const rulesStats =
+        state.config.rules !== null ? state.config.rules.getStats() : null;
+
+      let authenticated = 0;
+      let totalStoreSubscriptions = 0;
+      let totalRulesSubscriptions = 0;
+      for (const c of conns) {
+        if (c.authenticated) authenticated++;
+        totalStoreSubscriptions += c.storeSubscriptionCount;
+        totalRulesSubscriptions += c.rulesSubscriptionCount;
+      }
+
+      return {
+        name: state.config.name,
+        connectionCount: conns.length,
+        authEnabled: state.config.auth !== null,
+        rateLimitEnabled: state.config.rateLimit !== null,
+        rulesEnabled: state.config.rules !== null,
+        connections: {
+          active: conns.length,
+          authenticated,
+          totalStoreSubscriptions,
+          totalRulesSubscriptions,
+        },
+        store: storeStats,
+        rules: rulesStats,
+      };
+    }
+
+    case 'server.connections':
+      return getRegistryConnections(state.config.connectionRegistry);
+
+    default:
+      throw new NoexServerError(
+        ErrorCode.UNKNOWN_OPERATION,
+        `Unknown server operation "${request.type}"`,
+      );
+  }
 }
 
 // ── Internal: Utility ─────────────────────────────────────────────
