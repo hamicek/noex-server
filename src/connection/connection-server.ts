@@ -12,7 +12,11 @@ import {
 } from '../protocol/serializer.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
-import { handleStoreRequest } from '../proxy/store-proxy.js';
+import {
+  handleStoreRequest,
+  handleStoreSubscribe,
+  handleStoreUnsubscribe,
+} from '../proxy/store-proxy.js';
 
 // ── State ─────────────────────────────────────────────────────────
 
@@ -22,7 +26,7 @@ export interface ConnectionState {
   readonly config: ResolvedServerConfig;
   session: AuthSession | null;
   authenticated: boolean;
-  readonly storeSubscriptions: Map<string, () => Promise<void>>;
+  readonly storeSubscriptions: Map<string, () => void>;
   readonly rulesSubscriptions: Map<string, () => void>;
   lastPingAt: number;
   lastPongAt: number;
@@ -102,7 +106,7 @@ export function createConnectionBehavior(
 
     terminate(reason, state): void {
       for (const unsub of state.storeSubscriptions.values()) {
-        void unsub();
+        unsub();
       }
       state.storeSubscriptions.clear();
 
@@ -258,6 +262,24 @@ async function handleStoreOperation(
   request: ClientRequest,
   state: ConnectionState,
 ): Promise<unknown> {
+  if (request.type === 'store.subscribe') {
+    return handleStoreSubscribe(
+      request,
+      state.config.store,
+      state.storeSubscriptions,
+      (subscriptionId, data) => {
+        sendRaw(
+          state.ws,
+          serializePush(subscriptionId, 'subscription', data),
+        );
+      },
+    );
+  }
+
+  if (request.type === 'store.unsubscribe') {
+    return handleStoreUnsubscribe(request, state.storeSubscriptions);
+  }
+
   return handleStoreRequest(request, state.config.store);
 }
 

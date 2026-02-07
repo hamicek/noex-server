@@ -9,6 +9,7 @@ import {
 import type { ClientRequest } from '../protocol/types.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
+import { generateSubscriptionId } from './query-subscription-map.js';
 
 // ── Validation helpers ────────────────────────────────────────────
 
@@ -293,4 +294,61 @@ async function dispatchStoreOperation(
         `Unknown store operation "${request.type}"`,
       );
   }
+}
+
+// ── Subscription operations ──────────────────────────────────────
+
+export async function handleStoreSubscribe(
+  request: ClientRequest,
+  store: Store,
+  subscriptions: Map<string, () => void>,
+  onPush: (subscriptionId: string, data: unknown) => void,
+): Promise<{ subscriptionId: string; data: unknown }> {
+  try {
+    const queryName = requireString(request, 'query');
+    const params = request['params'];
+    const subscriptionId = generateSubscriptionId();
+    const resolvedParams = params !== undefined && params !== null
+      ? params
+      : undefined;
+
+    const callback = (result: unknown): void => {
+      if (subscriptions.has(subscriptionId)) {
+        onPush(subscriptionId, result);
+      }
+    };
+
+    if (resolvedParams !== undefined) {
+      const unsub = await store.subscribe(queryName, resolvedParams, callback);
+      subscriptions.set(subscriptionId, unsub);
+    } else {
+      const unsub = await store.subscribe(queryName, callback);
+      subscriptions.set(subscriptionId, unsub);
+    }
+
+    const initialResult = await store.runQuery(queryName, resolvedParams);
+
+    return { subscriptionId, data: initialResult };
+  } catch (error) {
+    throw mapStoreError(error);
+  }
+}
+
+export function handleStoreUnsubscribe(
+  request: ClientRequest,
+  subscriptions: Map<string, () => void>,
+): { unsubscribed: true } {
+  const subscriptionId = requireString(request, 'subscriptionId');
+  const unsub = subscriptions.get(subscriptionId);
+
+  if (!unsub) {
+    throw new NoexServerError(
+      ErrorCode.NOT_FOUND,
+      `Subscription "${subscriptionId}" not found`,
+    );
+  }
+
+  unsub();
+  subscriptions.delete(subscriptionId);
+  return { unsubscribed: true };
 }
