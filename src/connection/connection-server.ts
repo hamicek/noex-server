@@ -26,6 +26,7 @@ import {
 } from '../proxy/rules-proxy.js';
 import { handleAuthRequest } from '../auth/auth-handler.js';
 import { checkPermissions } from '../auth/permissions.js';
+import { isBackpressured } from '../lifecycle/backpressure.js';
 
 // ── State ─────────────────────────────────────────────────────────
 
@@ -216,6 +217,10 @@ function handlePush(
   },
   state: ConnectionState,
 ): ConnectionState {
+  if (isBackpressured(state.ws, state.config.backpressure)) {
+    // Drop push — reactive queries will resend on the next state change.
+    return state;
+  }
   sendRaw(
     state.ws,
     serializePush(msg.subscriptionId, msg.channel, msg.data),

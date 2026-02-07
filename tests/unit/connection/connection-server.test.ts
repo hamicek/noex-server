@@ -13,6 +13,7 @@ import type { WebSocket } from 'ws';
 
 class MockWebSocket {
   readyState = 1; // WebSocket.OPEN
+  bufferedAmount = 0;
   readonly sent: string[] = [];
   private readonly events = new Map<string, ((...args: unknown[]) => void)[]>();
 
@@ -498,6 +499,84 @@ describe('ConnectionServer', () => {
       await flush();
 
       expect(GenServer.isRunning(ref)).toBe(true);
+    });
+  });
+
+  // ── backpressure ─────────────────────────────────────────────
+
+  describe('backpressure', () => {
+    it('drops push messages when write buffer exceeds high water mark', async () => {
+      ws = new MockWebSocket();
+      config = createMockConfig({
+        backpressure: { maxBufferedBytes: 100, highWaterMark: 0.5 },
+      });
+      ref = await GenServer.start(
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+      );
+      ws.clearSent();
+
+      // Simulate high buffer — threshold is 100 * 0.5 = 50
+      ws.bufferedAmount = 50;
+
+      GenServer.cast(ref, {
+        type: 'push',
+        subscriptionId: 'sub-1',
+        channel: 'subscription',
+        data: { users: [] },
+      });
+      await flush();
+
+      expect(ws.sent).toHaveLength(0);
+    });
+
+    it('sends push messages when write buffer is below high water mark', async () => {
+      ws = new MockWebSocket();
+      config = createMockConfig({
+        backpressure: { maxBufferedBytes: 100, highWaterMark: 0.5 },
+      });
+      ref = await GenServer.start(
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+      );
+      ws.clearSent();
+
+      ws.bufferedAmount = 49;
+
+      GenServer.cast(ref, {
+        type: 'push',
+        subscriptionId: 'sub-1',
+        channel: 'subscription',
+        data: { users: [] },
+      });
+      await flush();
+
+      expect(ws.sent).toHaveLength(1);
+      const push = parseResponse(ws);
+      expect(push['type']).toBe('push');
+      expect(push['subscriptionId']).toBe('sub-1');
+    });
+
+    it('does not affect request-response messages under backpressure', async () => {
+      ws = new MockWebSocket();
+      config = createMockConfig({
+        backpressure: { maxBufferedBytes: 100, highWaterMark: 0.5 },
+      });
+      ref = await GenServer.start(
+        createConnectionBehavior(asWs(ws), '127.0.0.1', config),
+      );
+      ws.clearSent();
+
+      ws.bufferedAmount = 80;
+
+      // Request-response should still work (errors are fine — mock store)
+      GenServer.cast(ref, {
+        type: 'ws_message',
+        raw: '{"id":1,"type":"store.all","bucket":"users"}',
+      });
+      await flush();
+
+      expect(ws.sent).toHaveLength(1);
+      const response = parseResponse(ws);
+      expect(response['id']).toBe(1);
     });
   });
 });
