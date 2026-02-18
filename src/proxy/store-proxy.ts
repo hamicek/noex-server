@@ -1,5 +1,6 @@
 import type { Store } from '@hamicek/noex-store';
 import {
+  BucketAlreadyExistsError,
   BucketNotDefinedError,
   ValidationError,
   UniqueConstraintError,
@@ -74,6 +75,13 @@ function optionalObject(
 
 export function mapStoreError(error: unknown): NoexServerError {
   if (error instanceof NoexServerError) return error;
+
+  if (error instanceof BucketAlreadyExistsError) {
+    return new NoexServerError(
+      ErrorCode.ALREADY_EXISTS,
+      error.message,
+    );
+  }
 
   if (error instanceof BucketNotDefinedError) {
     return new NoexServerError(

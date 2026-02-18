@@ -20,6 +20,7 @@ import {
   handleStoreUnsubscribe,
   handleStoreTransaction,
 } from '../proxy/store-proxy.js';
+import { handleAdminStoreRequest } from '../proxy/admin-store-proxy.js';
 import {
   handleRulesRequest,
   handleRulesSubscribe,
@@ -428,6 +429,15 @@ async function handleStoreOperation(
     return handleStoreTransaction(request, state.config.store);
   }
 
+  if (
+    request.type === 'store.defineBucket' ||
+    request.type === 'store.dropBucket' ||
+    request.type === 'store.updateBucket' ||
+    request.type === 'store.getBucketSchema'
+  ) {
+    return handleAdminStoreRequest(request, state.config.store);
+  }
+
   return handleStoreRequest(request, state.config.store);
 }
 
@@ -596,6 +606,7 @@ function logAudit(
 
 function extractAuditResource(request: ClientRequest): string {
   if (typeof request['bucket'] === 'string') return request['bucket'];
+  if (typeof request['name'] === 'string') return request['name'];
   if (typeof request['topic'] === 'string') return request['topic'];
   if (typeof request['key'] === 'string') return request['key'];
   if (typeof request['pattern'] === 'string') return request['pattern'];
