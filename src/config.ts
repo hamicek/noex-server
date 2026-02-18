@@ -4,11 +4,14 @@ import type { RuleEngine } from '@hamicek/noex-rules';
 import type { ConnectionRegistry } from './connection/connection-registry.js';
 import type { AuditLog } from './audit/audit-log.js';
 import type { SessionBlacklist } from './auth/session-revocation.js';
+import type { ProcedureEngine } from './procedures/procedure-engine.js';
 
 import type { AuditConfig } from './audit/audit-types.js';
+import type { ProceduresConfig } from './procedures/procedure-types.js';
 
 export type { AuditEntry, AuditConfig, AuditQuery } from './audit/audit-types.js';
 export type { RevocationConfig, RevokedEntry } from './auth/session-revocation.js';
+export type { ProceduresConfig } from './procedures/procedure-types.js';
 
 // ── Auth ──────────────────────────────────────────────────────────
 
@@ -139,6 +142,9 @@ export interface ServerConfig {
   /** Session revocation configuration. Requires auth to be configured. */
   readonly revocation?: import('./auth/session-revocation.js').RevocationConfig;
 
+  /** Procedures engine configuration. When omitted, procedures are disabled. */
+  readonly procedures?: ProceduresConfig;
+
   /** Server name used for registry and logging. Default: 'noex-server'. */
   readonly name?: string;
 }
@@ -161,6 +167,7 @@ export interface ResolvedServerConfig {
   readonly connectionLimits: ConnectionLimitsConfig;
   readonly auditLog: AuditLog | null;
   readonly blacklist: SessionBlacklist | null;
+  readonly procedureEngine: ProcedureEngine | null;
   readonly name: string;
 }
 
@@ -186,6 +193,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     },
     auditLog: null,
     blacklist: null,
+    procedureEngine: null,
     name: config.name ?? DEFAULT_NAME,
   };
 }

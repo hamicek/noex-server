@@ -27,6 +27,7 @@ import {
   handleRulesUnsubscribe,
 } from '../proxy/rules-proxy.js';
 import { handleAdminRulesRequest } from '../proxy/admin-rules-proxy.js';
+import { handleProceduresRequest } from '../proxy/procedures-proxy.js';
 import { handleAuthRequest } from '../auth/auth-handler.js';
 import { checkPermissions } from '../auth/permissions.js';
 import { getOperationTier } from '../auth/operation-tiers.js';
@@ -373,6 +374,10 @@ async function routeRequest(
     return handleAuditOperation(request, state);
   }
 
+  if (type.startsWith('procedures.')) {
+    return handleProceduresOperation(request, state);
+  }
+
   if (type.startsWith('server.')) {
     return handleServerOperation(request, state);
   }
@@ -493,6 +498,20 @@ async function handleRulesOperation(
   }
 
   return handleRulesRequest(request, state.config.rules);
+}
+
+async function handleProceduresOperation(
+  request: ClientRequest,
+  state: ConnectionState,
+): Promise<unknown> {
+  if (state.config.procedureEngine === null) {
+    throw new NoexServerError(
+      ErrorCode.UNKNOWN_OPERATION,
+      'Procedures engine is not configured',
+    );
+  }
+
+  return handleProceduresRequest(request, state.config.procedureEngine);
 }
 
 async function handleAuthOperation(

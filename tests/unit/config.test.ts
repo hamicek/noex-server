@@ -94,6 +94,7 @@ describe('resolveConfig', () => {
       connectionLimits: { maxSubscriptionsPerConnection: 100 },
       auditLog: null,
       blacklist: null,
+      procedureEngine: null,
       name: 'noex-server',
     });
   });

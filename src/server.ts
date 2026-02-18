@@ -20,6 +20,7 @@ import {
 } from './connection/connection-registry.js';
 import { AuditLog } from './audit/audit-log.js';
 import { SessionBlacklist } from './auth/session-revocation.js';
+import { ProcedureEngine } from './procedures/procedure-engine.js';
 import type { ConnectionRef } from './connection/connection-supervisor.js';
 
 // ── Stats ─────────────────────────────────────────────────────────
@@ -108,7 +109,13 @@ export class NoexServer {
         ? new SessionBlacklist(config.revocation)
         : null;
 
-    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry, auditLog, blacklist };
+    const procedureEngine = new ProcedureEngine(
+      config.store,
+      config.rules ?? null,
+      config.procedures,
+    );
+
+    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry, auditLog, blacklist, procedureEngine };
     const supervisorRef = await startConnectionSupervisor(resolvedFull);
 
     let httpServer: HttpServer;
