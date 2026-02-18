@@ -18,6 +18,7 @@ import {
   type ConnectionInfo,
   type ConnectionRegistry,
 } from './connection/connection-registry.js';
+import { AuditLog } from './audit/audit-log.js';
 
 // ── Stats ─────────────────────────────────────────────────────────
 
@@ -97,7 +98,9 @@ export class NoexServer {
 
     const connectionRegistry = await createConnectionRegistry(resolved.name);
 
-    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry };
+    const auditLog = config.audit !== undefined ? new AuditLog(config.audit) : null;
+
+    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry, auditLog };
     const supervisorRef = await startConnectionSupervisor(resolvedFull);
 
     let httpServer: HttpServer;

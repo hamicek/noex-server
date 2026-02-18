@@ -16,6 +16,9 @@ export type {
   HeartbeatConfig,
   BackpressureConfig,
   ConnectionLimitsConfig,
+  AuditConfig,
+  AuditEntry,
+  AuditQuery,
 } from './config.js';
 
 // ── Auth ─────────────────────────────────────────────────────────

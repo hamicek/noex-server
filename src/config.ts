@@ -2,6 +2,11 @@ import type { RateLimiterRef } from '@hamicek/noex';
 import type { Store } from '@hamicek/noex-store';
 import type { RuleEngine } from '@hamicek/noex-rules';
 import type { ConnectionRegistry } from './connection/connection-registry.js';
+import type { AuditLog } from './audit/audit-log.js';
+
+import type { AuditConfig } from './audit/audit-types.js';
+
+export type { AuditEntry, AuditConfig, AuditQuery } from './audit/audit-types.js';
 
 // ── Auth ──────────────────────────────────────────────────────────
 
@@ -126,6 +131,9 @@ export interface ServerConfig {
   /** Per-connection limits. */
   readonly connectionLimits?: Partial<ConnectionLimitsConfig>;
 
+  /** Audit log configuration. When omitted, audit logging is disabled. */
+  readonly audit?: AuditConfig;
+
   /** Server name used for registry and logging. Default: 'noex-server'. */
   readonly name?: string;
 }
@@ -146,6 +154,7 @@ export interface ResolvedServerConfig {
   readonly heartbeat: HeartbeatConfig;
   readonly backpressure: BackpressureConfig;
   readonly connectionLimits: ConnectionLimitsConfig;
+  readonly auditLog: AuditLog | null;
   readonly name: string;
 }
 
@@ -169,6 +178,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
       ...DEFAULT_CONNECTION_LIMITS,
       ...config.connectionLimits,
     },
+    auditLog: null,
     name: config.name ?? DEFAULT_NAME,
   };
 }

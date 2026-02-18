@@ -29,6 +29,8 @@ import { checkPermissions } from '../auth/permissions.js';
 import { getOperationTier } from '../auth/operation-tiers.js';
 import { hasAccessForTier } from '../auth/role-hierarchy.js';
 import { isBackpressured } from '../lifecycle/backpressure.js';
+import { handleAuditRequest } from '../proxy/audit-proxy.js';
+import type { AuditEntry } from '../audit/audit-types.js';
 import {
   updateConnectionAuth,
   updateConnectionSubscriptions,
@@ -199,12 +201,14 @@ async function handleWsMessage(
     await checkRateLimit(state);
     const result = await routeRequest(request, state);
     sendRaw(state.ws, serializeResult(request.id, result));
+    logAudit(state, request, 'success');
   } catch (error) {
     if (error instanceof NoexServerError) {
       sendRaw(
         state.ws,
         serializeError(request.id, error.code, error.message, error.details),
       );
+      logAudit(state, request, 'error', error.message);
     } else {
       sendRaw(
         state.ws,
@@ -214,6 +218,7 @@ async function handleWsMessage(
           'Internal server error',
         ),
       );
+      logAudit(state, request, 'error', 'Internal server error');
     }
   }
 
@@ -341,6 +346,10 @@ async function routeRequest(
 
   if (type.startsWith('auth.')) {
     return handleAuthOperation(request, state);
+  }
+
+  if (type.startsWith('audit.')) {
+    return handleAuditOperation(request, state);
   }
 
   if (type.startsWith('server.')) {
@@ -504,6 +513,57 @@ async function handleServerOperation(
         `Unknown server operation "${request.type}"`,
       );
   }
+}
+
+// ── Internal: Audit Operations ──────────────────────────────────
+
+function handleAuditOperation(
+  request: ClientRequest,
+  state: ConnectionState,
+): unknown {
+  if (state.config.auditLog === null) {
+    throw new NoexServerError(
+      ErrorCode.UNKNOWN_OPERATION,
+      'Audit log is not configured',
+    );
+  }
+  return handleAuditRequest(request, state.config.auditLog);
+}
+
+// ── Internal: Audit Logging ─────────────────────────────────────
+
+function logAudit(
+  state: ConnectionState,
+  request: ClientRequest,
+  result: 'success' | 'error',
+  error?: string,
+): void {
+  const { auditLog } = state.config;
+  if (auditLog === null) return;
+
+  const tier = getOperationTier(request.type);
+  if (!auditLog.shouldLog(tier)) return;
+
+  const entry: AuditEntry = {
+    timestamp: Date.now(),
+    userId: state.session?.userId ?? null,
+    sessionId: state.connectionId,
+    operation: request.type,
+    resource: extractAuditResource(request),
+    result,
+    ...(error !== undefined ? { error } : {}),
+    remoteAddress: state.remoteAddress,
+  };
+
+  auditLog.append(entry);
+}
+
+function extractAuditResource(request: ClientRequest): string {
+  if (typeof request['bucket'] === 'string') return request['bucket'];
+  if (typeof request['topic'] === 'string') return request['topic'];
+  if (typeof request['key'] === 'string') return request['key'];
+  if (typeof request['pattern'] === 'string') return request['pattern'];
+  return '*';
 }
 
 // ── Internal: Utility ─────────────────────────────────────────────
