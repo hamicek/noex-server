@@ -434,7 +434,10 @@ async function handleStoreOperation(
     request.type === 'store.defineBucket' ||
     request.type === 'store.dropBucket' ||
     request.type === 'store.updateBucket' ||
-    request.type === 'store.getBucketSchema'
+    request.type === 'store.getBucketSchema' ||
+    request.type === 'store.defineQuery' ||
+    request.type === 'store.undefineQuery' ||
+    request.type === 'store.listQueries'
   ) {
     return handleAdminStoreRequest(request, state.config.store);
   }

@@ -5,6 +5,7 @@ import {
   ValidationError,
   UniqueConstraintError,
   TransactionConflictError,
+  QueryAlreadyDefinedError,
   QueryNotDefinedError,
 } from '@hamicek/noex-store';
 import type { ClientRequest } from '../protocol/types.js';
@@ -114,6 +115,13 @@ export function mapStoreError(error: unknown): NoexServerError {
     );
   }
 
+  if (error instanceof QueryAlreadyDefinedError) {
+    return new NoexServerError(
+      ErrorCode.ALREADY_EXISTS,
+      error.message,
+    );
+  }
+
   if (error instanceof QueryNotDefinedError) {
     return new NoexServerError(
       ErrorCode.QUERY_NOT_DEFINED,
@@ -135,6 +143,8 @@ export function mapStoreError(error: unknown): NoexServerError {
         return new NoexServerError(ErrorCode.ALREADY_EXISTS, error.message);
       case 'TransactionConflictError':
         return new NoexServerError(ErrorCode.CONFLICT, error.message);
+      case 'QueryAlreadyDefinedError':
+        return new NoexServerError(ErrorCode.ALREADY_EXISTS, error.message);
       case 'QueryNotDefinedError':
         return new NoexServerError(ErrorCode.QUERY_NOT_DEFINED, error.message);
       default:

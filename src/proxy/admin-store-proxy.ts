@@ -1,4 +1,4 @@
-import type { Store, BucketDefinition, BucketSchemaUpdate } from '@hamicek/noex-store';
+import type { Store, BucketDefinition, BucketSchemaUpdate, DeclarativeQueryConfig } from '@hamicek/noex-store';
 import type { ClientRequest } from '../protocol/types.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
@@ -88,6 +88,31 @@ async function dispatchAdminStoreOperation(
         );
       }
       return { name, config };
+    }
+
+    // ── Query management ──────────────────────────────────────────
+
+    case 'store.defineQuery': {
+      const name = requireString(request, 'name');
+      const config = requireObject(request, 'config') as unknown as DeclarativeQueryConfig;
+      store.defineDeclarativeQuery(name, config);
+      return { name, defined: true };
+    }
+
+    case 'store.undefineQuery': {
+      const name = requireString(request, 'name');
+      const removed = store.undefineQuery(name);
+      if (!removed) {
+        throw new NoexServerError(
+          ErrorCode.QUERY_NOT_DEFINED,
+          `Query "${name}" is not defined`,
+        );
+      }
+      return { name, undefined: true };
+    }
+
+    case 'store.listQueries': {
+      return { queries: store.getQueries() };
     }
 
     default:
