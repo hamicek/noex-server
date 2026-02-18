@@ -11,6 +11,7 @@ export type {
   AuthConfig,
   AuthSession,
   PermissionConfig,
+  PermissionRule,
   RateLimitConfig,
   HeartbeatConfig,
   BackpressureConfig,

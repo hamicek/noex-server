@@ -12,12 +12,31 @@ export interface AuthSession {
   readonly expiresAt?: number;
 }
 
+export interface PermissionRule {
+  /** Role this rule applies to. */
+  readonly role: string;
+  /** Allowed operations — exact string, wildcard pattern, or array of patterns. */
+  readonly allow: string | readonly string[];
+  /** Restrict to specific store buckets (only checked for store.* operations). */
+  readonly buckets?: readonly string[];
+  /** Restrict to specific rules topics (only checked for rules.* operations). */
+  readonly topics?: readonly string[];
+}
+
 export interface PermissionConfig {
-  readonly check: (
+  /** Default behavior when no rule matches. Default: 'allow'. */
+  readonly default?: 'allow' | 'deny';
+  /** Declarative permission rules (evaluated in order, first match wins). */
+  readonly rules?: readonly PermissionRule[];
+  /**
+   * Custom check function (overrides declarative rules).
+   * Return true to allow, false to deny, undefined to fall through to rules.
+   */
+  readonly check?: (
     session: AuthSession,
     operation: string,
     resource: string,
-  ) => boolean;
+  ) => boolean | undefined;
 }
 
 export interface AuthConfig {
