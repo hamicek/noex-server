@@ -93,6 +93,7 @@ describe('resolveConfig', () => {
       backpressure: { maxBufferedBytes: 1_048_576, highWaterMark: 0.8 },
       connectionLimits: { maxSubscriptionsPerConnection: 100 },
       auditLog: null,
+      blacklist: null,
       name: 'noex-server',
     });
   });

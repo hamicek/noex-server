@@ -8,6 +8,7 @@ export interface ConnectionMetadata {
   readonly connectedAt: number;
   readonly authenticated: boolean;
   readonly userId: string | null;
+  readonly roles: readonly string[];
   readonly storeSubscriptionCount: number;
   readonly rulesSubscriptionCount: number;
 }
@@ -20,6 +21,7 @@ export interface ConnectionInfo {
   readonly connectedAt: number;
   readonly authenticated: boolean;
   readonly userId: string | null;
+  readonly roles: readonly string[];
   readonly storeSubscriptionCount: number;
   readonly rulesSubscriptionCount: number;
 }
@@ -66,6 +68,7 @@ export function registerConnection(
     connectedAt: Date.now(),
     authenticated: false,
     userId: null,
+    roles: [],
     storeSubscriptionCount: 0,
     rulesSubscriptionCount: 0,
   });
@@ -78,11 +81,13 @@ export function updateConnectionAuth(
   connectionId: string,
   authenticated: boolean,
   userId: string | null,
+  roles: readonly string[],
 ): void {
   registry.updateMetadata(connectionId, (meta) => ({
     ...meta,
     authenticated,
     userId,
+    roles,
   }));
 }
 

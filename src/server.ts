@@ -1,7 +1,7 @@
 import { createServer, type Server as HttpServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import type { SupervisorRef } from '@hamicek/noex';
-import { RateLimiter, type RateLimiterRef } from '@hamicek/noex';
+import { GenServer, RateLimiter, type RateLimiterRef } from '@hamicek/noex';
 import type { ServerConfig } from './config.js';
 import { resolveConfig, type ResolvedServerConfig } from './config.js';
 import { serializeSystem } from './protocol/serializer.js';
@@ -19,6 +19,8 @@ import {
   type ConnectionRegistry,
 } from './connection/connection-registry.js';
 import { AuditLog } from './audit/audit-log.js';
+import { SessionBlacklist } from './auth/session-revocation.js';
+import type { ConnectionRef } from './connection/connection-supervisor.js';
 
 // ── Stats ─────────────────────────────────────────────────────────
 
@@ -56,6 +58,7 @@ export class NoexServer {
   readonly #supervisorRef: SupervisorRef;
   readonly #rateLimiterRef: RateLimiterRef | null;
   readonly #connectionRegistry: ConnectionRegistry;
+  readonly #blacklist: SessionBlacklist;
   readonly #startedAt: number;
   #running: boolean;
 
@@ -73,6 +76,7 @@ export class NoexServer {
     this.#supervisorRef = supervisorRef;
     this.#rateLimiterRef = rateLimiterRef;
     this.#connectionRegistry = connectionRegistry;
+    this.#blacklist = config.blacklist ?? new SessionBlacklist();
     this.#startedAt = Date.now();
     this.#running = true;
   }
@@ -99,8 +103,12 @@ export class NoexServer {
     const connectionRegistry = await createConnectionRegistry(resolved.name);
 
     const auditLog = config.audit !== undefined ? new AuditLog(config.audit) : null;
+    const blacklist =
+      config.auth !== undefined
+        ? new SessionBlacklist(config.revocation)
+        : null;
 
-    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry, auditLog };
+    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry, auditLog, blacklist };
     const supervisorRef = await startConnectionSupervisor(resolvedFull);
 
     let httpServer: HttpServer;
@@ -256,6 +264,62 @@ export class NoexServer {
   /** Returns information about all active connections. */
   getConnections(): ConnectionInfo[] {
     return getRegistryConnections(this.#connectionRegistry);
+  }
+
+  /**
+   * Revokes all connections belonging to a specific user.
+   * The user is added to the blacklist and cannot re-authenticate
+   * until the blacklist TTL expires.
+   *
+   * Returns the number of disconnected connections.
+   */
+  revokeSession(userId: string): number {
+    this.#blacklist.revoke(userId);
+
+    const matches = this.#connectionRegistry.select(
+      (_key, entry) => entry.metadata.userId === userId,
+    );
+
+    for (const m of matches) {
+      GenServer.cast(m.ref as ConnectionRef, { type: 'session_revoked' });
+    }
+
+    return matches.length;
+  }
+
+  /**
+   * Revokes connections matching a filter.
+   * Each matched user is added to the blacklist.
+   *
+   * Returns the number of disconnected connections.
+   */
+  revokeSessions(filter: {
+    userId?: string;
+    role?: string;
+  }): number {
+    const matches = this.#connectionRegistry.select((_key, entry) => {
+      if (!entry.metadata.authenticated) return false;
+      if (
+        filter.userId !== undefined &&
+        entry.metadata.userId !== filter.userId
+      )
+        return false;
+      if (
+        filter.role !== undefined &&
+        !entry.metadata.roles.includes(filter.role)
+      )
+        return false;
+      return true;
+    });
+
+    for (const m of matches) {
+      if (m.metadata.userId !== null) {
+        this.#blacklist.revoke(m.metadata.userId);
+      }
+      GenServer.cast(m.ref as ConnectionRef, { type: 'session_revoked' });
+    }
+
+    return matches.length;
   }
 
   /** Returns server statistics. */

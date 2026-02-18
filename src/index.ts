@@ -19,6 +19,8 @@ export type {
   AuditConfig,
   AuditEntry,
   AuditQuery,
+  RevocationConfig,
+  RevokedEntry,
 } from './config.js';
 
 // ── Auth ─────────────────────────────────────────────────────────

@@ -10,6 +10,7 @@ import {
   serializeResult,
   serializePush,
   serializePing,
+  serializeSystem,
 } from '../protocol/serializer.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
@@ -64,7 +65,8 @@ export type ConnectionCast =
       readonly subscriptionId: string;
       readonly channel: string;
       readonly data: unknown;
-    };
+    }
+  | { readonly type: 'session_revoked' };
 
 // ── WebSocket readyState constants ────────────────────────────────
 
@@ -123,6 +125,8 @@ export function createConnectionBehavior(
           return handleHeartbeatTick(state);
         case 'push':
           return handlePush(msg, state);
+        case 'session_revoked':
+          return handleSessionRevoked(state);
       }
     },
 
@@ -241,6 +245,21 @@ function handlePush(
     state.ws,
     serializePush(msg.subscriptionId, msg.channel, msg.data),
   );
+  return state;
+}
+
+// ── Internal: Session Revocation ──────────────────────────────────
+
+function handleSessionRevoked(state: ConnectionState): ConnectionState {
+  if (state.ws.readyState === WS_OPEN) {
+    sendRaw(
+      state.ws,
+      serializeSystem('session_revoked', {
+        reason: 'Session revoked by administrator',
+      }),
+    );
+    state.ws.close(4002, 'session_revoked');
+  }
   return state;
 }
 
@@ -455,11 +474,28 @@ async function handleAuthOperation(
 ): Promise<unknown> {
   const result = await handleAuthRequest(request, state, state.config.auth);
 
+  // Check blacklist after successful login
+  if (
+    request.type === 'auth.login' &&
+    state.authenticated &&
+    state.session !== null &&
+    state.config.blacklist !== null &&
+    state.config.blacklist.isRevoked(state.session.userId)
+  ) {
+    state.session = null;
+    state.authenticated = false;
+    throw new NoexServerError(
+      ErrorCode.SESSION_REVOKED,
+      'Session has been revoked',
+    );
+  }
+
   updateConnectionAuth(
     state.config.connectionRegistry,
     state.connectionId,
     state.authenticated,
     state.session?.userId ?? null,
+    state.session?.roles ? [...state.session.roles] : [],
   );
 
   return result;

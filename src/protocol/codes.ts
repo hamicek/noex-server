@@ -14,6 +14,7 @@ export const ErrorCode = {
   BUCKET_NOT_DEFINED: 'BUCKET_NOT_DEFINED',
   QUERY_NOT_DEFINED: 'QUERY_NOT_DEFINED',
   RULES_NOT_AVAILABLE: 'RULES_NOT_AVAILABLE',
+  SESSION_REVOKED: 'SESSION_REVOKED',
 } as const;
 
 export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

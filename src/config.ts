@@ -3,10 +3,12 @@ import type { Store } from '@hamicek/noex-store';
 import type { RuleEngine } from '@hamicek/noex-rules';
 import type { ConnectionRegistry } from './connection/connection-registry.js';
 import type { AuditLog } from './audit/audit-log.js';
+import type { SessionBlacklist } from './auth/session-revocation.js';
 
 import type { AuditConfig } from './audit/audit-types.js';
 
 export type { AuditEntry, AuditConfig, AuditQuery } from './audit/audit-types.js';
+export type { RevocationConfig, RevokedEntry } from './auth/session-revocation.js';
 
 // ── Auth ──────────────────────────────────────────────────────────
 
@@ -134,6 +136,9 @@ export interface ServerConfig {
   /** Audit log configuration. When omitted, audit logging is disabled. */
   readonly audit?: AuditConfig;
 
+  /** Session revocation configuration. Requires auth to be configured. */
+  readonly revocation?: import('./auth/session-revocation.js').RevocationConfig;
+
   /** Server name used for registry and logging. Default: 'noex-server'. */
   readonly name?: string;
 }
@@ -155,6 +160,7 @@ export interface ResolvedServerConfig {
   readonly backpressure: BackpressureConfig;
   readonly connectionLimits: ConnectionLimitsConfig;
   readonly auditLog: AuditLog | null;
+  readonly blacklist: SessionBlacklist | null;
   readonly name: string;
 }
 
@@ -179,6 +185,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
       ...config.connectionLimits,
     },
     auditLog: null,
+    blacklist: null,
     name: config.name ?? DEFAULT_NAME,
   };
 }
