@@ -47,8 +47,9 @@ export function hasAccessForTier(
 function highestRoleLevel(roles: readonly string[]): number {
   let max = -1;
   for (const role of roles) {
-    if (role in ROLE_LEVELS && ROLE_LEVELS[role] > max) {
-      max = ROLE_LEVELS[role];
+    const level = ROLE_LEVELS[role];
+    if (level !== undefined && level > max) {
+      max = level;
     }
   }
   return max;
