@@ -34,7 +34,16 @@ export function mapRulesError(error: unknown): NoexServerError {
     );
   }
 
+  // Fallback: match by error name for cross-module-boundary resilience
+  // (instanceof fails when multiple copies of @hamicek/noex-rules are resolved)
   if (error instanceof Error) {
+    if (error.name === 'RuleValidationError') {
+      return new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        error.message,
+        (error as unknown as Record<string, unknown>)['details'],
+      );
+    }
     if (error.message.includes('is not running')) {
       return new NoexServerError(
         ErrorCode.RULES_NOT_AVAILABLE,
