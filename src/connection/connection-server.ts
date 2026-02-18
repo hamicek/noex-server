@@ -26,6 +26,8 @@ import {
 } from '../proxy/rules-proxy.js';
 import { handleAuthRequest } from '../auth/auth-handler.js';
 import { checkPermissions } from '../auth/permissions.js';
+import { getOperationTier } from '../auth/operation-tiers.js';
+import { hasAccessForTier } from '../auth/role-hierarchy.js';
 import { isBackpressured } from '../lifecycle/backpressure.js';
 import {
   updateConnectionAuth,
@@ -282,6 +284,17 @@ function checkAuth(state: ConnectionState, request: ClientRequest): void {
       ErrorCode.UNAUTHORIZED,
       'Session expired',
     );
+  }
+
+  // Tier check — enforce built-in role hierarchy for known operations
+  if (auth !== null && state.session !== null) {
+    const tier = getOperationTier(type);
+    if (tier !== null && !hasAccessForTier(state.session.roles, tier)) {
+      throw new NoexServerError(
+        ErrorCode.FORBIDDEN,
+        `Role level insufficient for ${type} (requires ${tier})`,
+      );
+    }
   }
 
   if (auth?.permissions !== undefined && state.session !== null) {

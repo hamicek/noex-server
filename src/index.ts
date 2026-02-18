@@ -17,6 +17,12 @@ export type {
   ConnectionLimitsConfig,
 } from './config.js';
 
+// ── Auth ─────────────────────────────────────────────────────────
+
+export type { OperationTier } from './auth/operation-tiers.js';
+export { getOperationTier } from './auth/operation-tiers.js';
+export { hasAccessForTier, isBuiltinRole } from './auth/role-hierarchy.js';
+
 // ── Errors ───────────────────────────────────────────────────────
 
 export { NoexServerError } from './errors.js';
