@@ -26,6 +26,7 @@ import {
   handleRulesSubscribe,
   handleRulesUnsubscribe,
 } from '../proxy/rules-proxy.js';
+import { handleAdminRulesRequest } from '../proxy/admin-rules-proxy.js';
 import { handleAuthRequest } from '../auth/auth-handler.js';
 import { checkPermissions } from '../auth/permissions.js';
 import { getOperationTier } from '../auth/operation-tiers.js';
@@ -475,6 +476,19 @@ async function handleRulesOperation(
     return result;
   }
 
+  if (
+    request.type === 'rules.registerRule' ||
+    request.type === 'rules.unregisterRule' ||
+    request.type === 'rules.updateRule' ||
+    request.type === 'rules.enableRule' ||
+    request.type === 'rules.disableRule' ||
+    request.type === 'rules.getRule' ||
+    request.type === 'rules.getRules' ||
+    request.type === 'rules.validateRule'
+  ) {
+    return handleAdminRulesRequest(request, state.config.rules);
+  }
+
   return handleRulesRequest(request, state.config.rules);
 }
 
@@ -607,6 +621,7 @@ function logAudit(
 function extractAuditResource(request: ClientRequest): string {
   if (typeof request['bucket'] === 'string') return request['bucket'];
   if (typeof request['name'] === 'string') return request['name'];
+  if (typeof request['ruleId'] === 'string') return request['ruleId'];
   if (typeof request['topic'] === 'string') return request['topic'];
   if (typeof request['key'] === 'string') return request['key'];
   if (typeof request['pattern'] === 'string') return request['pattern'];

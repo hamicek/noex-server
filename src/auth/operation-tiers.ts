@@ -31,6 +31,7 @@ const OPERATION_TIERS: Record<string, OperationTier> = {
   'rules.disableRule':     'admin',
   'rules.getRule':         'admin',
   'rules.getRules':        'admin',
+  'rules.validateRule':    'admin',
 
   // Procedure management (Phase 5)
   'procedures.register':   'admin',
