@@ -121,11 +121,25 @@ export function mapStoreError(error: unknown): NoexServerError {
     );
   }
 
+  // Fallback: match by error name for cross-module-boundary resilience
+  // (instanceof fails when multiple copies of @hamicek/noex-store are resolved)
   if (error instanceof Error) {
-    return new NoexServerError(
-      ErrorCode.INTERNAL_ERROR,
-      error.message,
-    );
+    switch (error.name) {
+      case 'BucketAlreadyExistsError':
+        return new NoexServerError(ErrorCode.ALREADY_EXISTS, error.message);
+      case 'BucketNotDefinedError':
+        return new NoexServerError(ErrorCode.BUCKET_NOT_DEFINED, error.message);
+      case 'ValidationError':
+        return new NoexServerError(ErrorCode.VALIDATION_ERROR, error.message);
+      case 'UniqueConstraintError':
+        return new NoexServerError(ErrorCode.ALREADY_EXISTS, error.message);
+      case 'TransactionConflictError':
+        return new NoexServerError(ErrorCode.CONFLICT, error.message);
+      case 'QueryNotDefinedError':
+        return new NoexServerError(ErrorCode.QUERY_NOT_DEFINED, error.message);
+      default:
+        return new NoexServerError(ErrorCode.INTERNAL_ERROR, error.message);
+    }
   }
 
   return new NoexServerError(
