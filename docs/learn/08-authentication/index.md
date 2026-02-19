@@ -25,12 +25,20 @@ Manage sessions over time:
 - `auth.logout` — end session
 - Token expiration and re-authentication
 
+### [8.4 Audit Logging](./04-audit-logging.md)
+
+Track operations on the server:
+- `AuditConfig` with tiers (`admin`, `write`, `read`)
+- `audit.query` — query the audit log
+- `onEntry` callback for durable persistence
+
 ## What You'll Learn
 
 By the end of this section, you'll be able to:
 - Add token-based authentication to the server
 - Implement role-based permission checks
 - Manage session lifecycle including expiration and logout
+- Enable and query audit logging for security and compliance
 
 ---
 
