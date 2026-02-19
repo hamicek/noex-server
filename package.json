@@ -11,6 +11,9 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": {
+    "noex-server": "./dist/bin/noex-server.js"
+  },
   "files": [
     "dist"
   ],
