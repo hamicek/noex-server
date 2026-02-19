@@ -321,6 +321,24 @@ Write a complete session lifecycle scenario:
 
 </details>
 
+## Known Limitations
+
+### In-Memory Sessions
+
+All session state is stored in memory:
+
+- **Custom auth** (`AuthConfig.validate`): Session state lives in the connection's process. When the WebSocket connection drops, the session is gone. A server restart drops all connections and their sessions.
+- **Built-in identity** (`BuiltInAuthConfig`): Sessions are stored in the `_sessions` bucket inside noex-store. This bucket is entirely in-memory — a server restart clears all sessions, effectively logging out every user.
+
+In both cases, **restarting the server means all users must re-authenticate**.
+
+### No External Session Store
+
+There is no built-in mechanism to persist sessions to an external store (Redis, database, etc.). If session survival across restarts is required:
+
+- Use a reverse proxy or API gateway for session management
+- Implement token-based auth where the token itself carries session state (e.g., JWTs verified by your `AuthConfig.validate` callback) — this way the server is stateless and restarts are transparent to clients
+
 ## Summary
 
 - `auth.whoami` returns current session info — `{ authenticated, userId, roles, expiresAt }`
