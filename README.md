@@ -370,6 +370,59 @@ The request pipeline for each message:
 
 ---
 
+## Production Considerations
+
+### TLS / WSS
+
+The server listens on plain HTTP and `ws://`. For production, terminate TLS at a reverse proxy (nginx, Caddy, etc.) and forward `wss://` connections to the server:
+
+```nginx
+upstream noex {
+    server 127.0.0.1:8080;
+}
+
+server {
+    listen 443 ssl;
+    server_name api.example.com;
+
+    ssl_certificate     /etc/ssl/certs/api.example.com.pem;
+    ssl_certificate_key /etc/ssl/private/api.example.com.key;
+
+    location / {
+        proxy_pass http://noex;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+### Session Persistence
+
+The built-in identity system stores sessions in the `_sessions` noex-store bucket, which lives entirely in memory. A server restart clears all sessions — every user will need to log in again. There is no built-in hook for external session storage.
+
+### Audit Log Persistence
+
+The audit ring buffer is in-memory (default 10,000 entries). Once the buffer is full, oldest entries are overwritten. Use `onEntry` to persist entries to durable storage:
+
+```typescript
+const server = await NoexServer.start({
+  store,
+  audit: {
+    tiers: ['admin', 'write'],
+    onEntry: (entry) => {
+      fs.appendFileSync('audit.jsonl', JSON.stringify(entry) + '\n');
+    },
+  },
+});
+```
+
+See the [Audit reference](./docs/reference/11-audit.md) for the full `AuditEntry` shape and query API.
+
+---
+
 ## License
 
 MIT
