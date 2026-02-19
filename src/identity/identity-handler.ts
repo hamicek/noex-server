@@ -16,6 +16,7 @@ export interface IdentityAuthState {
 // ── Authorization helpers ───────────────────────────────────────
 
 const ADMIN_ROLES = new Set(['superadmin', 'admin']);
+const SUPERADMIN_ROLE = 'superadmin';
 
 function requireAuth(state: IdentityAuthState): AuthSession {
   if (!state.authenticated || state.session === null) {
@@ -28,6 +29,14 @@ function requireAdmin(state: IdentityAuthState): AuthSession {
   const session = requireAuth(state);
   if (!session.roles.some((r) => ADMIN_ROLES.has(r))) {
     throw new NoexServerError(ErrorCode.FORBIDDEN, 'Admin role required');
+  }
+  return session;
+}
+
+function requireSuperadmin(state: IdentityAuthState): AuthSession {
+  const session = requireAuth(state);
+  if (!session.roles.includes(SUPERADMIN_ROLE)) {
+    throw new NoexServerError(ErrorCode.FORBIDDEN, 'Superadmin role required');
   }
   return session;
 }
@@ -84,6 +93,22 @@ export async function handleIdentityRequest(
       return handleChangePassword(request, state, manager);
     case 'identity.resetPassword':
       return handleResetPassword(request, state, manager);
+
+    // Role management
+    case 'identity.createRole':
+      return handleCreateRole(request, state, manager);
+    case 'identity.updateRole':
+      return handleUpdateRole(request, state, manager);
+    case 'identity.deleteRole':
+      return handleDeleteRole(request, state, manager);
+    case 'identity.listRoles':
+      return handleListRoles(state, manager);
+    case 'identity.assignRole':
+      return handleAssignRole(request, state, manager);
+    case 'identity.removeRole':
+      return handleRemoveRole(request, state, manager);
+    case 'identity.getUserRoles':
+      return handleGetUserRoles(request, state, manager);
 
     default:
       throw new NoexServerError(
@@ -364,6 +389,115 @@ async function handleResetPassword(
 
   await manager.resetPassword(userId, newPassword);
   return { reset: true };
+}
+
+// ── identity.createRole ──────────────────────────────────────────
+
+async function handleCreateRole(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireSuperadmin(state);
+
+  const name = requireString(request, 'name');
+
+  return manager.createRole({
+    name,
+    description: typeof request['description'] === 'string' ? request['description'] : undefined,
+    permissions: Array.isArray(request['permissions']) ? request['permissions'] : undefined,
+  });
+}
+
+// ── identity.updateRole ──────────────────────────────────────────
+
+async function handleUpdateRole(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireSuperadmin(state);
+
+  const roleId = requireString(request, 'roleId');
+
+  return manager.updateRole(roleId, {
+    description: request['description'] !== undefined
+      ? (typeof request['description'] === 'string' ? request['description'] : undefined)
+      : undefined,
+    permissions: Array.isArray(request['permissions']) ? request['permissions'] : undefined,
+  });
+}
+
+// ── identity.deleteRole ──────────────────────────────────────────
+
+async function handleDeleteRole(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireSuperadmin(state);
+
+  const roleId = requireString(request, 'roleId');
+  await manager.deleteRole(roleId);
+  return { deleted: true };
+}
+
+// ── identity.listRoles ───────────────────────────────────────────
+
+async function handleListRoles(
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireAdmin(state);
+
+  const roles = await manager.listRoles();
+  return { roles };
+}
+
+// ── identity.assignRole ──────────────────────────────────────────
+
+async function handleAssignRole(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  const session = requireAdmin(state);
+
+  const userId = requireString(request, 'userId');
+  const roleName = requireString(request, 'roleName');
+
+  await manager.assignRole(userId, roleName, session.userId);
+  return { assigned: true };
+}
+
+// ── identity.removeRole ──────────────────────────────────────────
+
+async function handleRemoveRole(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireAdmin(state);
+
+  const userId = requireString(request, 'userId');
+  const roleName = requireString(request, 'roleName');
+
+  await manager.removeRole(userId, roleName);
+  return { removed: true };
+}
+
+// ── identity.getUserRoles ────────────────────────────────────────
+
+async function handleGetUserRoles(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireAdmin(state);
+
+  const userId = requireString(request, 'userId');
+  const roles = await manager.getUserRoles(userId);
+  return { roles };
 }
 
 // ── Utilities ───────────────────────────────────────────────────

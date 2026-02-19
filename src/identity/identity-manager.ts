@@ -3,12 +3,15 @@ import type {
   IdentityConfig,
   RolePermission,
   RoleRecord,
+  RoleInfo,
   UserRecord,
   UserInfo,
   UserRoleRecord,
   LoginResult,
   CreateUserInput,
   UpdateUserInput,
+  CreateRoleInput,
+  UpdateRoleInput,
   ListUsersOptions,
   ListUsersResult,
 } from './identity-types.js';
@@ -510,6 +513,209 @@ export class IdentityManager {
     await this.#sessions.deleteUserSessions(userId);
   }
 
+  // ── Role Management ────────────────────────────────────────────
+
+  /**
+   * Create a custom role.
+   * Validates name uniqueness, prevents names colliding with system roles.
+   * Throws VALIDATION_ERROR for invalid input, ALREADY_EXISTS for duplicate name.
+   */
+  async createRole(input: CreateRoleInput): Promise<RoleInfo> {
+    const { name, description, permissions } = input;
+
+    if (typeof name !== 'string' || name.length < 1 || name.length > 64) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        'Role name must be between 1 and 64 characters',
+      );
+    }
+
+    const existing = await this.#store.bucket('_roles').where({ name });
+    if (existing.length > 0) {
+      throw new NoexServerError(
+        ErrorCode.ALREADY_EXISTS,
+        `Role "${name}" already exists`,
+      );
+    }
+
+    const data: Record<string, unknown> = {
+      name,
+      system: false,
+      permissions: (permissions ?? []) as unknown as Record<string, unknown>[],
+    };
+    if (description !== undefined) data['description'] = description;
+
+    const record = await this.#store.bucket('_roles').insert(data);
+    return stripRoleVersion(record as unknown as RoleRecord);
+  }
+
+  /**
+   * Update a role's description and/or permissions.
+   * System role names cannot be changed, but their permissions and description can be updated.
+   * Throws NOT_FOUND if role does not exist.
+   */
+  async updateRole(roleId: string, updates: UpdateRoleInput): Promise<RoleInfo> {
+    const existing = (await this.#store
+      .bucket('_roles')
+      .get(roleId)) as unknown as RoleRecord | undefined;
+
+    if (existing === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'Role not found');
+    }
+
+    const changes: Record<string, unknown> = {};
+    if (updates.description !== undefined) changes['description'] = updates.description;
+    if (updates.permissions !== undefined) {
+      changes['permissions'] = updates.permissions as unknown as Record<string, unknown>[];
+    }
+
+    if (Object.keys(changes).length === 0) {
+      return stripRoleVersion(existing);
+    }
+
+    const updated = await this.#store.bucket('_roles').update(roleId, changes);
+    return stripRoleVersion(updated as unknown as RoleRecord);
+  }
+
+  /**
+   * Delete a custom role.
+   * System roles (superadmin, admin, writer, reader) cannot be deleted.
+   * Cascading: removes all user-role assignments referencing this role.
+   * Throws FORBIDDEN for system roles, NOT_FOUND if role does not exist.
+   */
+  async deleteRole(roleId: string): Promise<void> {
+    const existing = (await this.#store
+      .bucket('_roles')
+      .get(roleId)) as unknown as RoleRecord | undefined;
+
+    if (existing === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'Role not found');
+    }
+
+    if (existing.system) {
+      throw new NoexServerError(ErrorCode.FORBIDDEN, 'Cannot delete system role');
+    }
+
+    // Remove all user-role assignments for this role
+    const assignments = await this.#store.bucket('_user_roles').where({ roleId });
+    for (const ur of assignments) {
+      await this.#store.bucket('_user_roles').delete((ur as unknown as { id: string }).id);
+    }
+
+    await this.#store.bucket('_roles').delete(roleId);
+  }
+
+  /** List all roles. */
+  async listRoles(): Promise<RoleInfo[]> {
+    const roles = (await this.#store
+      .bucket('_roles')
+      .all()) as unknown as RoleRecord[];
+    return roles.map(stripRoleVersion);
+  }
+
+  /**
+   * Assign a role to a user by role name.
+   * Throws NOT_FOUND if user or role does not exist.
+   * Throws ALREADY_EXISTS if the user already has this role.
+   */
+  async assignRole(userId: string, roleName: string, grantedBy?: string): Promise<void> {
+    // Verify user exists
+    if (userId !== SUPERADMIN_USER_ID) {
+      const user = await this.#store.bucket('_users').get(userId);
+      if (user === undefined) {
+        throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+      }
+    }
+
+    // Look up role by name
+    const roles = (await this.#store
+      .bucket('_roles')
+      .where({ name: roleName })) as unknown as RoleRecord[];
+
+    if (roles.length === 0) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, `Role "${roleName}" not found`);
+    }
+    const role = roles[0]!;
+
+    // Check for duplicate assignment
+    const existing = (await this.#store
+      .bucket('_user_roles')
+      .where({ userId })) as unknown as UserRoleRecord[];
+
+    if (existing.some((ur) => ur.roleId === role.id)) {
+      throw new NoexServerError(
+        ErrorCode.ALREADY_EXISTS,
+        `User already has role "${roleName}"`,
+      );
+    }
+
+    const data: Record<string, unknown> = { userId, roleId: role.id };
+    if (grantedBy !== undefined) data['grantedBy'] = grantedBy;
+
+    await this.#store.bucket('_user_roles').insert(data);
+  }
+
+  /**
+   * Remove a role from a user by role name.
+   * Throws NOT_FOUND if role does not exist or user does not have the role.
+   */
+  async removeRole(userId: string, roleName: string): Promise<void> {
+    const roles = (await this.#store
+      .bucket('_roles')
+      .where({ name: roleName })) as unknown as RoleRecord[];
+
+    if (roles.length === 0) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, `Role "${roleName}" not found`);
+    }
+    const role = roles[0]!;
+
+    const assignments = (await this.#store
+      .bucket('_user_roles')
+      .where({ userId })) as unknown as UserRoleRecord[];
+
+    const match = assignments.find((ur) => ur.roleId === role.id);
+    if (match === undefined) {
+      throw new NoexServerError(
+        ErrorCode.NOT_FOUND,
+        `User does not have role "${roleName}"`,
+      );
+    }
+
+    await this.#store.bucket('_user_roles').delete(match.id);
+  }
+
+  /**
+   * Get all roles assigned to a user (full RoleInfo objects).
+   * Throws NOT_FOUND if user does not exist.
+   */
+  async getUserRoles(userId: string): Promise<RoleInfo[]> {
+    if (userId === SUPERADMIN_USER_ID) {
+      const allRoles = (await this.#store
+        .bucket('_roles')
+        .all()) as unknown as RoleRecord[];
+      const superadminRole = allRoles.find((r) => r.name === 'superadmin');
+      return superadminRole ? [stripRoleVersion(superadminRole)] : [];
+    }
+
+    const user = await this.#store.bucket('_users').get(userId);
+    if (user === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    const assignments = (await this.#store
+      .bucket('_user_roles')
+      .where({ userId })) as unknown as UserRoleRecord[];
+
+    if (assignments.length === 0) return [];
+
+    const roleIds = new Set(assignments.map((ur) => ur.roleId));
+    const allRoles = (await this.#store
+      .bucket('_roles')
+      .all()) as unknown as RoleRecord[];
+
+    return allRoles.filter((r) => roleIds.has(r.id)).map(stripRoleVersion);
+  }
+
   // ── Private ─────────────────────────────────────────────────────
 
   async #getUserRoleNames(userId: string): Promise<string[]> {
@@ -534,6 +740,11 @@ export class IdentityManager {
 
 function stripPasswordHash(record: UserRecord): UserInfo {
   const { passwordHash: _, _version: __, ...rest } = record;
+  return rest;
+}
+
+function stripRoleVersion(record: RoleRecord): RoleInfo {
+  const { _version: _, ...rest } = record;
   return rest;
 }
 

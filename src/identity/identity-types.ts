@@ -146,6 +146,19 @@ export interface ListUsersResult {
   readonly pageSize: number;
 }
 
+// ── Role CRUD Inputs ────────────────────────────────────────────
+
+export interface CreateRoleInput {
+  readonly name: string;
+  readonly description?: string;
+  readonly permissions?: readonly RolePermission[];
+}
+
+export interface UpdateRoleInput {
+  readonly description?: string;
+  readonly permissions?: readonly RolePermission[];
+}
+
 // ── Login Result ────────────────────────────────────────────────
 
 export interface LoginResult {
