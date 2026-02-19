@@ -55,6 +55,24 @@ const OPERATION_TIERS: Record<string, OperationTier> = {
   'rules.deleteFact':      'write',
   'procedures.call':       'write',
 
+  // ── Identity operations (always auditable) ─────────────────────
+  'identity.login':           'admin',
+  'identity.loginWithSecret': 'admin',
+  'identity.logout':          'admin',
+  'identity.createUser':      'admin',
+  'identity.deleteUser':      'admin',
+  'identity.enableUser':      'admin',
+  'identity.disableUser':     'admin',
+  'identity.changePassword':  'admin',
+  'identity.resetPassword':   'admin',
+  'identity.assignRole':      'admin',
+  'identity.removeRole':      'admin',
+  'identity.createRole':      'admin',
+  'identity.deleteRole':      'admin',
+  'identity.grant':           'admin',
+  'identity.revoke':          'admin',
+  'identity.transferOwner':   'admin',
+
   // ── READ tier ──────────────────────────────────────────────────
   'store.get':             'read',
   'store.all':             'read',

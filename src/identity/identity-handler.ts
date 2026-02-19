@@ -248,10 +248,10 @@ async function handleCreateUser(
   return manager.createUser({
     username,
     password,
-    displayName: typeof request['displayName'] === 'string' ? request['displayName'] : undefined,
-    email: typeof request['email'] === 'string' ? request['email'] : undefined,
-    enabled: typeof request['enabled'] === 'boolean' ? request['enabled'] : undefined,
-    metadata: isPlainObject(request['metadata']) ? request['metadata'] as Record<string, unknown> : undefined,
+    ...(typeof request['displayName'] === 'string' ? { displayName: request['displayName'] } : {}),
+    ...(typeof request['email'] === 'string' ? { email: request['email'] } : {}),
+    ...(typeof request['enabled'] === 'boolean' ? { enabled: request['enabled'] } : {}),
+    ...(isPlainObject(request['metadata']) ? { metadata: request['metadata'] as Record<string, unknown> } : {}),
   });
 }
 
@@ -284,17 +284,17 @@ async function handleUpdateUser(
     throw new NoexServerError(ErrorCode.FORBIDDEN, 'Admin role required');
   }
 
-  return manager.updateUser(userId, {
-    displayName: request['displayName'] !== undefined
-      ? (typeof request['displayName'] === 'string' ? request['displayName'] : null)
-      : undefined,
-    email: request['email'] !== undefined
-      ? (typeof request['email'] === 'string' ? request['email'] : null)
-      : undefined,
-    metadata: request['metadata'] !== undefined
-      ? (isPlainObject(request['metadata']) ? request['metadata'] as Record<string, unknown> : null)
-      : undefined,
-  });
+  const updates: Record<string, unknown> = {};
+  if (request['displayName'] !== undefined) {
+    updates['displayName'] = typeof request['displayName'] === 'string' ? request['displayName'] : null;
+  }
+  if (request['email'] !== undefined) {
+    updates['email'] = typeof request['email'] === 'string' ? request['email'] : null;
+  }
+  if (request['metadata'] !== undefined) {
+    updates['metadata'] = isPlainObject(request['metadata']) ? request['metadata'] : null;
+  }
+  return manager.updateUser(userId, updates as import('./identity-types.js').UpdateUserInput);
 }
 
 // ── identity.deleteUser ─────────────────────────────────────────
@@ -326,10 +326,10 @@ async function handleListUsers(
 ): Promise<unknown> {
   requireAdmin(state);
 
-  const page = typeof request['page'] === 'number' ? request['page'] : undefined;
-  const pageSize = typeof request['pageSize'] === 'number' ? request['pageSize'] : undefined;
-
-  return manager.listUsers({ page, pageSize });
+  return manager.listUsers({
+    ...(typeof request['page'] === 'number' ? { page: request['page'] } : {}),
+    ...(typeof request['pageSize'] === 'number' ? { pageSize: request['pageSize'] } : {}),
+  });
 }
 
 // ── identity.enableUser ─────────────────────────────────────────
@@ -418,8 +418,8 @@ async function handleCreateRole(
 
   return manager.createRole({
     name,
-    description: typeof request['description'] === 'string' ? request['description'] : undefined,
-    permissions: Array.isArray(request['permissions']) ? request['permissions'] : undefined,
+    ...(typeof request['description'] === 'string' ? { description: request['description'] } : {}),
+    ...(Array.isArray(request['permissions']) ? { permissions: request['permissions'] } : {}),
   });
 }
 
@@ -435,10 +435,9 @@ async function handleUpdateRole(
   const roleId = requireString(request, 'roleId');
 
   return manager.updateRole(roleId, {
-    description: request['description'] !== undefined
-      ? (typeof request['description'] === 'string' ? request['description'] : undefined)
-      : undefined,
-    permissions: Array.isArray(request['permissions']) ? request['permissions'] : undefined,
+    ...(request['description'] !== undefined && typeof request['description'] === 'string'
+      ? { description: request['description'] } : {}),
+    ...(Array.isArray(request['permissions']) ? { permissions: request['permissions'] } : {}),
   });
 }
 

@@ -714,6 +714,8 @@ function logAudit(
   const tier = getOperationTier(request.type);
   if (!auditLog.shouldLog(tier)) return;
 
+  const details = extractAuditDetails(request);
+
   const entry: AuditEntry = {
     timestamp: Date.now(),
     userId: state.session?.userId ?? null,
@@ -722,6 +724,7 @@ function logAudit(
     resource: extractAuditResource(request),
     result,
     ...(error !== undefined ? { error } : {}),
+    ...(details !== undefined ? { details } : {}),
     remoteAddress: state.remoteAddress,
   };
 
@@ -735,7 +738,52 @@ function extractAuditResource(request: ClientRequest): string {
   if (typeof request['topic'] === 'string') return request['topic'];
   if (typeof request['key'] === 'string') return request['key'];
   if (typeof request['pattern'] === 'string') return request['pattern'];
+
+  // Identity operations
+  if (typeof request['username'] === 'string') return `user:${request['username']}`;
+  if (typeof request['userId'] === 'string') return `user:${request['userId']}`;
+  if (typeof request['roleId'] === 'string') return `role:${request['roleId']}`;
+  if (typeof request['resourceType'] === 'string' && typeof request['resourceName'] === 'string') {
+    return `${request['resourceType']}:${request['resourceName']}`;
+  }
+
   return '*';
+}
+
+function extractAuditDetails(request: ClientRequest): Record<string, unknown> | undefined {
+  const { type } = request;
+
+  if (type === 'identity.login') {
+    return { username: request['username'] };
+  }
+
+  if (type === 'identity.createUser') {
+    return { username: request['username'] };
+  }
+
+  if (type === 'identity.assignRole' || type === 'identity.removeRole') {
+    return { userId: request['userId'], roleName: request['roleName'] };
+  }
+
+  if (type === 'identity.grant' || type === 'identity.revoke') {
+    return {
+      subjectType: request['subjectType'],
+      subjectId: request['subjectId'],
+      resourceType: request['resourceType'],
+      resourceName: request['resourceName'],
+      operations: request['operations'],
+    };
+  }
+
+  if (type === 'identity.transferOwner') {
+    return {
+      resourceType: request['resourceType'],
+      resourceName: request['resourceName'],
+      newOwnerId: request['newOwnerId'],
+    };
+  }
+
+  return undefined;
 }
 
 // ── Internal: System Bucket Guard ────────────────────────────────
