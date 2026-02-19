@@ -26,6 +26,7 @@ Complete API reference for `@hamicek/noex-server`. Every class, method, type, co
 | [Lifecycle](./08-lifecycle.md) | Heartbeat, backpressure, connection limits, rate limiting, graceful shutdown |
 | [Types](./09-types.md) | Shared types — ServerStats, ConnectionsStats, ConnectionInfo, ConnectionMetadata |
 | [Errors](./10-errors.md) | ErrorCode enum, NoexServerError class, error response format |
+| [Audit](./11-audit.md) | Audit log — operation tiers, audit.query, external persistence |
 
 ## Quick Links
 
