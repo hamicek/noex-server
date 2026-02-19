@@ -95,6 +95,7 @@ describe('resolveConfig', () => {
       auditLog: null,
       blacklist: null,
       procedureEngine: null,
+      identityManager: null,
       name: 'noex-server',
     });
   });

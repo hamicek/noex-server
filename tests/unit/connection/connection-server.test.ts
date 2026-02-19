@@ -72,6 +72,8 @@ function createMockConfig(
     connectionLimits: { maxSubscriptionsPerConnection: 100 },
     auditLog: null,
     blacklist: null,
+    procedureEngine: null,
+    identityManager: null,
     name: 'test-server',
     ...overrides,
   };

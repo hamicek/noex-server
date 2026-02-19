@@ -5,6 +5,7 @@ import type { ConnectionRegistry } from './connection/connection-registry.js';
 import type { AuditLog } from './audit/audit-log.js';
 import type { SessionBlacklist } from './auth/session-revocation.js';
 import type { ProcedureEngine } from './procedures/procedure-engine.js';
+import type { IdentityManager } from './identity/identity-manager.js';
 
 import type { AuditConfig } from './audit/audit-types.js';
 import type { ProceduresConfig } from './procedures/procedure-types.js';
@@ -54,6 +55,25 @@ export interface AuthConfig {
   /** Whether authentication is required. Default: true when auth is configured. */
   readonly required?: boolean;
   readonly permissions?: PermissionConfig;
+}
+
+export interface BuiltInAuthConfig {
+  /** Discriminant — activates built-in identity management. */
+  readonly builtIn: true;
+  /** Secret for bootstrap login (identity.loginWithSecret). */
+  readonly adminSecret: string;
+  /** Session TTL in milliseconds. Default: 24 hours. */
+  readonly sessionTtl?: number;
+  /** Minimum password length. Default: 8. */
+  readonly passwordMinLength?: number;
+  /** Maximum sessions per user. Default: 10. */
+  readonly maxSessionsPerUser?: number;
+}
+
+export function isBuiltInAuth(
+  auth: AuthConfig | BuiltInAuthConfig,
+): auth is BuiltInAuthConfig {
+  return 'builtIn' in auth && (auth as BuiltInAuthConfig).builtIn === true;
 }
 
 // ── Sub-configs ───────────────────────────────────────────────────
@@ -122,7 +142,7 @@ export interface ServerConfig {
   readonly maxPayloadBytes?: number;
 
   /** Authentication configuration. When omitted, auth is disabled. */
-  readonly auth?: AuthConfig;
+  readonly auth?: AuthConfig | BuiltInAuthConfig;
 
   /** Rate limiting configuration. When omitted, rate limiting is disabled. */
   readonly rateLimit?: RateLimitConfig;
@@ -168,12 +188,20 @@ export interface ResolvedServerConfig {
   readonly auditLog: AuditLog | null;
   readonly blacklist: SessionBlacklist | null;
   readonly procedureEngine: ProcedureEngine | null;
+  readonly identityManager: IdentityManager | null;
   readonly name: string;
 }
 
 // ── Resolve ───────────────────────────────────────────────────────
 
 export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
+  // Built-in auth config is resolved separately in server.ts (needs IdentityManager),
+  // so we only pass through external AuthConfig here.
+  const auth =
+    config.auth !== undefined && !isBuiltInAuth(config.auth)
+      ? config.auth
+      : null;
+
   return {
     store: config.store,
     rules: config.rules ?? null,
@@ -181,7 +209,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     host: config.host ?? DEFAULT_HOST,
     path: config.path ?? DEFAULT_PATH,
     maxPayloadBytes: config.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
-    auth: config.auth ?? null,
+    auth,
     rateLimit: config.rateLimit ?? null,
     rateLimiterRef: null,
     connectionRegistry: null as unknown as ConnectionRegistry,
@@ -194,6 +222,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     auditLog: null,
     blacklist: null,
     procedureEngine: null,
+    identityManager: null,
     name: config.name ?? DEFAULT_NAME,
   };
 }

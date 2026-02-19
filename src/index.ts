@@ -9,6 +9,7 @@ export type { ConnectionInfo, ConnectionMetadata } from './connection/connection
 export type {
   ServerConfig,
   AuthConfig,
+  BuiltInAuthConfig,
   AuthSession,
   PermissionConfig,
   PermissionRule,
@@ -23,6 +24,7 @@ export type {
   RevokedEntry,
   ProceduresConfig,
 } from './config.js';
+export { isBuiltInAuth } from './config.js';
 
 // ── Auth ─────────────────────────────────────────────────────────
 

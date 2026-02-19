@@ -3,7 +3,8 @@ import { WebSocketServer } from 'ws';
 import type { SupervisorRef } from '@hamicek/noex';
 import { GenServer, RateLimiter, type RateLimiterRef } from '@hamicek/noex';
 import type { ServerConfig } from './config.js';
-import { resolveConfig, type ResolvedServerConfig } from './config.js';
+import { resolveConfig, isBuiltInAuth, type ResolvedServerConfig } from './config.js';
+import { IdentityManager } from './identity/identity-manager.js';
 import { serializeSystem } from './protocol/serializer.js';
 import {
   startConnectionSupervisor,
@@ -115,7 +116,34 @@ export class NoexServer {
       config.procedures,
     );
 
-    const resolvedFull = { ...resolved, rateLimiterRef, connectionRegistry, auditLog, blacklist, procedureEngine };
+    // Built-in identity: start IdentityManager and synthesize auth config
+    // so that auth.login can validate session tokens for reconnect.
+    let identityManager: IdentityManager | null = null;
+    let authOverride = resolved.auth;
+
+    if (config.auth !== undefined && isBuiltInAuth(config.auth)) {
+      identityManager = await IdentityManager.start(config.store, {
+        adminSecret: config.auth.adminSecret,
+        ...(config.auth.sessionTtl !== undefined ? { sessionTtlMs: config.auth.sessionTtl } : {}),
+      });
+
+      // Synthesize an AuthConfig so auth.login works for token-based reconnect.
+      authOverride = {
+        validate: (token) => identityManager!.validateSession(token),
+        required: true,
+      };
+    }
+
+    const resolvedFull = {
+      ...resolved,
+      auth: authOverride,
+      rateLimiterRef,
+      connectionRegistry,
+      auditLog,
+      blacklist,
+      procedureEngine,
+      identityManager,
+    };
     const supervisorRef = await startConnectionSupervisor(resolvedFull);
 
     let httpServer: HttpServer;
@@ -242,10 +270,15 @@ export class NoexServer {
       await RateLimiter.stop(this.#rateLimiterRef);
     }
 
-    // 5. Close the connection registry.
+    // 5. Stop the identity manager if it was started.
+    if (this.#config.identityManager !== null) {
+      await this.#config.identityManager.stop();
+    }
+
+    // 6. Close the connection registry.
     await closeConnectionRegistry(this.#connectionRegistry);
 
-    // 6. Wait for the HTTP server to finish closing.
+    // 7. Wait for the HTTP server to finish closing.
     await httpClosed;
   }
 
@@ -342,7 +375,7 @@ export class NoexServer {
       host: this.#config.host,
       connectionCount: this.connectionCount,
       uptimeMs: Date.now() - this.#startedAt,
-      authEnabled: this.#config.auth !== null,
+      authEnabled: this.#config.auth !== null || this.#config.identityManager !== null,
       rateLimitEnabled: this.#config.rateLimit !== null,
       rulesEnabled: this.#config.rules !== null,
       connections: aggregateConnections(conns),

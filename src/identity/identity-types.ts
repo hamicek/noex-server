@@ -117,6 +117,24 @@ export interface ResourceOwnerRecord {
   readonly _updatedAt: number;
 }
 
+// ── Login Result ────────────────────────────────────────────────
+
+export interface LoginResult {
+  readonly token: string;
+  readonly expiresAt: number;
+  readonly user: {
+    readonly id: string;
+    readonly username: string;
+    readonly displayName?: string;
+    readonly roles: readonly string[];
+  };
+}
+
+// ── Virtual Superadmin ──────────────────────────────────────────
+
+export const SUPERADMIN_USER_ID = '__superadmin__';
+export const SUPERADMIN_USERNAME = '__superadmin__';
+
 // ── Config ───────────────────────────────────────────────────────
 
 export interface IdentityConfig {

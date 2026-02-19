@@ -29,6 +29,7 @@ import {
 import { handleAdminRulesRequest } from '../proxy/admin-rules-proxy.js';
 import { handleProceduresRequest } from '../proxy/procedures-proxy.js';
 import { handleAuthRequest } from '../auth/auth-handler.js';
+import { handleIdentityRequest } from '../identity/identity-handler.js';
 import { checkPermissions } from '../auth/permissions.js';
 import { getOperationTier } from '../auth/operation-tiers.js';
 import { hasAccessForTier } from '../auth/role-hierarchy.js';
@@ -50,6 +51,7 @@ export interface ConnectionState {
   readonly config: ResolvedServerConfig;
   session: AuthSession | null;
   authenticated: boolean;
+  sessionToken: string | null;
   readonly storeSubscriptions: Map<string, () => void>;
   readonly rulesSubscriptions: Map<string, () => void>;
   lastPingAt: number;
@@ -86,7 +88,8 @@ export function createConnectionBehavior(
   return {
     init(): ConnectionState {
       const requiresAuth =
-        config.auth !== null && config.auth.required !== false;
+        config.identityManager !== null ||
+        (config.auth !== null && config.auth.required !== false);
 
       sendRaw(ws, serializeWelcome({ requiresAuth }));
 
@@ -97,6 +100,7 @@ export function createConnectionBehavior(
         config,
         session: null,
         authenticated: false,
+        sessionToken: null,
         storeSubscriptions: new Map(),
         rulesSubscriptions: new Map(),
         lastPingAt: 0,
@@ -291,9 +295,15 @@ function checkAuth(state: ConnectionState, request: ClientRequest): void {
 
   if (type.startsWith('auth.') || type === 'ping') return;
 
-  const { auth } = state.config;
+  // Identity login operations bypass auth (they establish authentication)
+  if (type === 'identity.login' || type === 'identity.loginWithSecret') return;
 
-  if (auth !== null && auth.required !== false && !state.authenticated) {
+  const { auth, identityManager } = state.config;
+  const authRequired =
+    identityManager !== null ||
+    (auth !== null && auth.required !== false);
+
+  if (authRequired && !state.authenticated) {
     throw new NoexServerError(
       ErrorCode.UNAUTHORIZED,
       'Authentication required',
@@ -364,6 +374,10 @@ async function routeRequest(
 
   if (type.startsWith('rules.')) {
     return handleRulesOperation(request, state);
+  }
+
+  if (type.startsWith('identity.')) {
+    return handleIdentityOperation(request, state);
   }
 
   if (type.startsWith('auth.')) {
@@ -512,6 +526,34 @@ async function handleProceduresOperation(
   }
 
   return handleProceduresRequest(request, state.config.procedureEngine);
+}
+
+async function handleIdentityOperation(
+  request: ClientRequest,
+  state: ConnectionState,
+): Promise<unknown> {
+  if (state.config.identityManager === null) {
+    throw new NoexServerError(
+      ErrorCode.UNKNOWN_OPERATION,
+      'Identity management is not configured',
+    );
+  }
+
+  const result = await handleIdentityRequest(
+    request,
+    state,
+    state.config.identityManager,
+  );
+
+  updateConnectionAuth(
+    state.config.connectionRegistry,
+    state.connectionId,
+    state.authenticated,
+    state.session?.userId ?? null,
+    state.session?.roles ? [...state.session.roles] : [],
+  );
+
+  return result;
 }
 
 async function handleAuthOperation(
