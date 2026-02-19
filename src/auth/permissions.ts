@@ -99,6 +99,9 @@ export function extractResource(request: ClientRequest): string {
     }
     const bucket = request['bucket'];
     if (typeof bucket === 'string') return bucket;
+    // Admin operations (defineBucket, dropBucket, etc.) use 'name' field
+    const name = request['name'];
+    if (typeof name === 'string') return name;
     return '*';
   }
 

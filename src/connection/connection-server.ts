@@ -488,7 +488,23 @@ async function handleStoreOperation(
     request.type === 'store.undefineQuery' ||
     request.type === 'store.listQueries'
   ) {
-    return handleAdminStoreRequest(request, state.config.store);
+    const result = await handleAdminStoreRequest(request, state.config.store);
+
+    // Track ownership for built-in identity mode
+    if (state.config.identityManager !== null && state.session !== null) {
+      const name = request['name'] as string;
+      if (request.type === 'store.defineBucket') {
+        await state.config.identityManager.setOwner(state.session.userId, 'bucket', name);
+      } else if (request.type === 'store.dropBucket') {
+        await state.config.identityManager.removeOwnership('bucket', name);
+      } else if (request.type === 'store.defineQuery') {
+        await state.config.identityManager.setOwner(state.session.userId, 'query', name);
+      } else if (request.type === 'store.undefineQuery') {
+        await state.config.identityManager.removeOwnership('query', name);
+      }
+    }
+
+    return result;
   }
 
   return handleStoreRequest(request, state.config.store);

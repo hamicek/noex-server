@@ -7,6 +7,9 @@ import type {
   UserRecord,
   UserInfo,
   UserRoleRecord,
+  AclRecord,
+  ResourceOwnerRecord,
+  AclResourceType,
   LoginResult,
   CreateUserInput,
   UpdateUserInput,
@@ -14,10 +17,16 @@ import type {
   UpdateRoleInput,
   ListUsersOptions,
   ListUsersResult,
+  GrantInput,
+  RevokeInput,
+  AclEntry,
+  OwnerInfo,
+  EffectiveAccessResult,
 } from './identity-types.js';
 import {
   SUPERADMIN_USER_ID,
   SUPERADMIN_USERNAME,
+  VALID_ACL_OPERATIONS,
 } from './identity-types.js';
 import type { AuthSession } from '../config.js';
 import { ensureSystemBuckets } from './system-buckets.js';
@@ -397,6 +406,14 @@ export class IdentityManager {
       await this.#store.bucket('_acl').delete((entry as unknown as { id: string }).id);
     }
 
+    // Delete all ownership records for this user
+    const owned = (await this.#store
+      .bucket('_resource_owners')
+      .where({ userId })) as unknown as ResourceOwnerRecord[];
+    for (const record of owned) {
+      await this.#store.bucket('_resource_owners').delete(record.id);
+    }
+
     // Delete the user record
     await this.#store.bucket('_users').delete(userId);
   }
@@ -720,6 +737,298 @@ export class IdentityManager {
     return allRoles.filter((r) => roleIds.has(r.id)).map(stripRoleVersion);
   }
 
+  // ── ACL Management ──────────────────────────────────────────────
+
+  /**
+   * Grant access to a subject (user or role) on a resource.
+   *
+   * Authorization: superadmin, admin role, resource owner, or user with
+   * ACL `admin` on the resource.
+   *
+   * If an ACL entry already exists for the same subject + resource,
+   * the new operations are merged into it.
+   */
+  async grant(callerUserId: string, input: GrantInput): Promise<void> {
+    const { subjectType, subjectId, resourceType, resourceName, operations } = input;
+
+    this.#validateAclOperations(operations);
+    await this.#validateSubject(subjectType, subjectId);
+    this.#requireAclPermission(callerUserId, resourceType, resourceName);
+
+    // Look for existing ACL entry
+    const existing = await this.#findAclEntry(subjectType, subjectId, resourceType, resourceName);
+
+    if (existing !== null) {
+      const merged = Array.from(new Set([...existing.operations, ...operations]));
+      await this.#store.bucket('_acl').update(existing.id, { operations: merged });
+    } else {
+      await this.#store.bucket('_acl').insert({
+        subjectType,
+        subjectId,
+        resourceType,
+        resourceName,
+        operations: [...operations],
+        grantedBy: callerUserId,
+      });
+    }
+  }
+
+  /**
+   * Revoke access from a subject on a resource.
+   *
+   * If `operations` is provided, only those are removed from the entry.
+   * If omitted, the entire ACL entry is deleted.
+   */
+  async revoke(callerUserId: string, input: RevokeInput): Promise<void> {
+    const { subjectType, subjectId, resourceType, resourceName, operations } = input;
+
+    this.#requireAclPermission(callerUserId, resourceType, resourceName);
+
+    const existing = await this.#findAclEntry(subjectType, subjectId, resourceType, resourceName);
+    if (existing === null) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'ACL entry not found');
+    }
+
+    if (operations === undefined || operations.length === 0) {
+      await this.#store.bucket('_acl').delete(existing.id);
+    } else {
+      const remaining = existing.operations.filter((op) => !operations.includes(op));
+      if (remaining.length === 0) {
+        await this.#store.bucket('_acl').delete(existing.id);
+      } else {
+        await this.#store.bucket('_acl').update(existing.id, { operations: remaining });
+      }
+    }
+  }
+
+  /**
+   * Get all ACL entries for a resource, enriched with subject names
+   * and ownership information.
+   */
+  async getAcl(resourceType: AclResourceType, resourceName: string): Promise<AclEntry[]> {
+    const aclRecords = (await this.#store.bucket('_acl').all()) as unknown as AclRecord[];
+    const matching = aclRecords.filter(
+      (r) => r.resourceType === resourceType && r.resourceName === resourceName,
+    );
+
+    // Resolve owner for this resource
+    const ownerRecord = await this.#findOwnerRecord(resourceType, resourceName);
+    const ownerUserId = ownerRecord?.userId ?? null;
+
+    const entries: AclEntry[] = [];
+    for (const record of matching) {
+      const subjectName = await this.#resolveSubjectName(record.subjectType, record.subjectId);
+      entries.push({
+        subjectType: record.subjectType,
+        subjectId: record.subjectId,
+        subjectName,
+        operations: [...record.operations],
+        isOwner: record.subjectType === 'user' && record.subjectId === ownerUserId,
+      });
+    }
+
+    // If the owner has no explicit ACL entry, include them with isOwner: true
+    if (ownerUserId !== null && !entries.some((e) => e.subjectType === 'user' && e.subjectId === ownerUserId)) {
+      const ownerName = await this.#resolveSubjectName('user', ownerUserId);
+      entries.unshift({
+        subjectType: 'user',
+        subjectId: ownerUserId,
+        subjectName: ownerName,
+        operations: [],
+        isOwner: true,
+      });
+    }
+
+    return entries;
+  }
+
+  /**
+   * Get effective access for a user — combines role permissions, ACL entries,
+   * and ownership into a single view.
+   */
+  async getEffectiveAccess(userId: string): Promise<EffectiveAccessResult> {
+    const isSuperadmin = userId === SUPERADMIN_USER_ID;
+    let username: string;
+    let roleNames: string[];
+
+    if (isSuperadmin) {
+      username = SUPERADMIN_USERNAME;
+      roleNames = ['superadmin'];
+    } else {
+      const user = (await this.#store
+        .bucket('_users')
+        .get(userId)) as unknown as UserRecord | undefined;
+      if (user === undefined) {
+        throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+      }
+      username = user.username;
+      roleNames = await this.#getUserRoleNames(userId);
+    }
+
+    // Collect user ACL entries
+    const userAcl = (await this.#store
+      .bucket('_acl')
+      .where({ subjectType: 'user', subjectId: userId })) as unknown as AclRecord[];
+
+    // Collect role ACL entries
+    const roleAcl: AclRecord[] = [];
+    const roleIds = this.#cache.getUserRoleIds(userId);
+    for (const roleId of roleIds) {
+      const entries = (await this.#store
+        .bucket('_acl')
+        .where({ subjectType: 'role', subjectId: roleId })) as unknown as AclRecord[];
+      roleAcl.push(...entries);
+    }
+
+    // Collect owned resources
+    const owned = (await this.#store
+      .bucket('_resource_owners')
+      .where({ userId })) as unknown as ResourceOwnerRecord[];
+
+    // Merge into resources map
+    const resourceMap = new Map<string, {
+      resourceType: AclResourceType;
+      resourceName: string;
+      operations: Set<string>;
+      isOwner: boolean;
+    }>();
+
+    const getOrCreate = (type: AclResourceType, name: string) => {
+      const key = `${type}:${name}`;
+      let entry = resourceMap.get(key);
+      if (entry === undefined) {
+        entry = { resourceType: type, resourceName: name, operations: new Set(), isOwner: false };
+        resourceMap.set(key, entry);
+      }
+      return entry;
+    };
+
+    for (const acl of userAcl) {
+      const entry = getOrCreate(acl.resourceType, acl.resourceName);
+      for (const op of acl.operations) entry.operations.add(op);
+    }
+
+    for (const acl of roleAcl) {
+      const entry = getOrCreate(acl.resourceType, acl.resourceName);
+      for (const op of acl.operations) entry.operations.add(op);
+    }
+
+    for (const own of owned) {
+      const entry = getOrCreate(own.resourceType, own.resourceName);
+      entry.isOwner = true;
+      entry.operations.add('read');
+      entry.operations.add('write');
+      entry.operations.add('admin');
+    }
+
+    const resources = Array.from(resourceMap.values()).map((r) => ({
+      resourceType: r.resourceType,
+      resourceName: r.resourceName,
+      operations: Array.from(r.operations).sort(),
+      isOwner: r.isOwner,
+    }));
+
+    return {
+      user: { id: userId, username, roles: roleNames },
+      resources,
+    };
+  }
+
+  // ── Ownership Management ──────────────────────────────────────────
+
+  /**
+   * Set a user as the owner of a resource. Idempotent.
+   * Used internally by the server after defineBucket/defineQuery.
+   */
+  async setOwner(userId: string, resourceType: AclResourceType, resourceName: string): Promise<void> {
+    const existing = await this.#findOwnerRecord(resourceType, resourceName);
+    if (existing !== null) {
+      if (existing.userId === userId) return;
+      await this.#store.bucket('_resource_owners').update(existing.id, { userId });
+      return;
+    }
+
+    await this.#store.bucket('_resource_owners').insert({
+      userId,
+      resourceType,
+      resourceName,
+    });
+  }
+
+  /**
+   * Get the owner of a resource. Returns null if no owner is set.
+   */
+  async getOwner(resourceType: AclResourceType, resourceName: string): Promise<OwnerInfo | null> {
+    const record = await this.#findOwnerRecord(resourceType, resourceName);
+    if (record === null) return null;
+
+    const username = await this.#resolveSubjectName('user', record.userId);
+    return {
+      userId: record.userId,
+      username,
+      resourceType,
+      resourceName,
+    };
+  }
+
+  /**
+   * Transfer ownership to a new user.
+   * Only the current owner or a superadmin can transfer.
+   */
+  async transferOwner(
+    callerUserId: string,
+    resourceType: AclResourceType,
+    resourceName: string,
+    newOwnerId: string,
+  ): Promise<void> {
+    const record = await this.#findOwnerRecord(resourceType, resourceName);
+    if (record === null) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'Resource has no owner');
+    }
+
+    const callerRoles = this.#cache.getUserRoleNames(callerUserId);
+    const isSuperadmin = callerRoles.includes('superadmin');
+    const isOwner = record.userId === callerUserId;
+
+    if (!isSuperadmin && !isOwner) {
+      throw new NoexServerError(
+        ErrorCode.FORBIDDEN,
+        'Only the owner or superadmin can transfer ownership',
+      );
+    }
+
+    // Verify new owner exists
+    if (newOwnerId !== SUPERADMIN_USER_ID) {
+      const user = await this.#store.bucket('_users').get(newOwnerId);
+      if (user === undefined) {
+        throw new NoexServerError(ErrorCode.NOT_FOUND, 'New owner not found');
+      }
+    }
+
+    await this.#store.bucket('_resource_owners').update(record.id, { userId: newOwnerId });
+  }
+
+  /**
+   * Remove ownership and all ACL entries for a resource.
+   * Used internally by the server after dropBucket/undefineQuery.
+   */
+  async removeOwnership(resourceType: AclResourceType, resourceName: string): Promise<void> {
+    // Delete ownership record
+    const ownerRecord = await this.#findOwnerRecord(resourceType, resourceName);
+    if (ownerRecord !== null) {
+      await this.#store.bucket('_resource_owners').delete(ownerRecord.id);
+    }
+
+    // Delete all ACL entries for this resource
+    const allAcl = (await this.#store.bucket('_acl').all()) as unknown as AclRecord[];
+    const matching = allAcl.filter(
+      (r) => r.resourceType === resourceType && r.resourceName === resourceName,
+    );
+    for (const entry of matching) {
+      await this.#store.bucket('_acl').delete(entry.id);
+    }
+  }
+
   // ── Permission Check ─────────────────────────────────────────────
 
   /**
@@ -776,6 +1085,115 @@ export class IdentityManager {
   }
 
   // ── Private ─────────────────────────────────────────────────────
+
+  #validateAclOperations(operations: readonly string[]): void {
+    if (!Array.isArray(operations) || operations.length === 0) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        'Operations must be a non-empty array',
+      );
+    }
+    for (const op of operations) {
+      if (!VALID_ACL_OPERATIONS.includes(op as typeof VALID_ACL_OPERATIONS[number])) {
+        throw new NoexServerError(
+          ErrorCode.VALIDATION_ERROR,
+          `Invalid ACL operation "${op}". Valid operations: ${VALID_ACL_OPERATIONS.join(', ')}`,
+        );
+      }
+    }
+  }
+
+  async #validateSubject(subjectType: string, subjectId: string): Promise<void> {
+    if (subjectType === 'user') {
+      if (subjectId !== SUPERADMIN_USER_ID) {
+        const user = await this.#store.bucket('_users').get(subjectId);
+        if (user === undefined) {
+          throw new NoexServerError(ErrorCode.NOT_FOUND, 'Subject user not found');
+        }
+      }
+    } else if (subjectType === 'role') {
+      const role = await this.#store.bucket('_roles').get(subjectId);
+      if (role === undefined) {
+        throw new NoexServerError(ErrorCode.NOT_FOUND, 'Subject role not found');
+      }
+    } else {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `Invalid subject type "${subjectType}". Must be "user" or "role"`,
+      );
+    }
+  }
+
+  /**
+   * Check that the caller has permission to manage ACL for a resource.
+   * Throws FORBIDDEN if not authorized.
+   */
+  #requireAclPermission(
+    callerUserId: string,
+    resourceType: AclResourceType,
+    resourceName: string,
+  ): void {
+    const roleNames = this.#cache.getUserRoleNames(callerUserId);
+
+    // Superadmin can manage anything
+    if (roleNames.includes('superadmin')) return;
+
+    // Admin role can manage anything
+    if (roleNames.includes('admin')) return;
+
+    // Owner can manage ACL for their resource
+    if (this.#cache.isOwner(callerUserId, resourceType, resourceName)) return;
+
+    // User with ACL 'admin' on the resource can manage ACL
+    const userAcl = this.#cache.getUserAcl(callerUserId, resourceType, resourceName);
+    if (userAcl !== null && userAcl.includes('admin')) return;
+
+    throw new NoexServerError(
+      ErrorCode.FORBIDDEN,
+      'Must be the resource owner, admin, or have admin ACL to manage permissions',
+    );
+  }
+
+  async #findAclEntry(
+    subjectType: string,
+    subjectId: string,
+    resourceType: string,
+    resourceName: string,
+  ): Promise<AclRecord | null> {
+    const all = (await this.#store.bucket('_acl').all()) as unknown as AclRecord[];
+    return all.find(
+      (r) =>
+        r.subjectType === subjectType &&
+        r.subjectId === subjectId &&
+        r.resourceType === resourceType &&
+        r.resourceName === resourceName,
+    ) ?? null;
+  }
+
+  async #findOwnerRecord(
+    resourceType: string,
+    resourceName: string,
+  ): Promise<ResourceOwnerRecord | null> {
+    const all = (await this.#store
+      .bucket('_resource_owners')
+      .all()) as unknown as ResourceOwnerRecord[];
+    return all.find(
+      (r) => r.resourceType === resourceType && r.resourceName === resourceName,
+    ) ?? null;
+  }
+
+  async #resolveSubjectName(subjectType: string, subjectId: string): Promise<string> {
+    if (subjectType === 'user') {
+      if (subjectId === SUPERADMIN_USER_ID) return SUPERADMIN_USERNAME;
+      const user = (await this.#store
+        .bucket('_users')
+        .get(subjectId)) as unknown as UserRecord | undefined;
+      return user?.username ?? subjectId;
+    }
+    // role
+    const role = this.#cache.getRole(subjectId);
+    return role?.name ?? subjectId;
+  }
 
   async #getUserRoleNames(userId: string): Promise<string[]> {
     if (userId === SUPERADMIN_USER_ID) {

@@ -117,6 +117,58 @@ export interface ResourceOwnerRecord {
   readonly _updatedAt: number;
 }
 
+// ── ACL Inputs ──────────────────────────────────────────────────
+
+export const VALID_ACL_OPERATIONS = ['read', 'write', 'admin'] as const;
+export type AclOperation = (typeof VALID_ACL_OPERATIONS)[number];
+
+export interface GrantInput {
+  readonly subjectType: AclSubjectType;
+  readonly subjectId: string;
+  readonly resourceType: AclResourceType;
+  readonly resourceName: string;
+  readonly operations: readonly string[];
+}
+
+export interface RevokeInput {
+  readonly subjectType: AclSubjectType;
+  readonly subjectId: string;
+  readonly resourceType: AclResourceType;
+  readonly resourceName: string;
+  readonly operations?: readonly string[];
+}
+
+// ── ACL Outputs ─────────────────────────────────────────────────
+
+export interface AclEntry {
+  readonly subjectType: AclSubjectType;
+  readonly subjectId: string;
+  readonly subjectName: string;
+  readonly operations: readonly string[];
+  readonly isOwner: boolean;
+}
+
+export interface OwnerInfo {
+  readonly userId: string;
+  readonly username: string;
+  readonly resourceType: AclResourceType;
+  readonly resourceName: string;
+}
+
+export interface EffectiveAccessResult {
+  readonly user: {
+    readonly id: string;
+    readonly username: string;
+    readonly roles: readonly string[];
+  };
+  readonly resources: ReadonlyArray<{
+    readonly resourceType: AclResourceType;
+    readonly resourceName: string;
+    readonly operations: readonly string[];
+    readonly isOwner: boolean;
+  }>;
+}
+
 // ── User CRUD Inputs ────────────────────────────────────────────
 
 export interface CreateUserInput {

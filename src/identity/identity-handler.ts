@@ -110,6 +110,20 @@ export async function handleIdentityRequest(
     case 'identity.getUserRoles':
       return handleGetUserRoles(request, state, manager);
 
+    // ACL & Ownership
+    case 'identity.grant':
+      return handleGrant(request, state, manager);
+    case 'identity.revoke':
+      return handleRevoke(request, state, manager);
+    case 'identity.getAcl':
+      return handleGetAcl(request, state, manager);
+    case 'identity.myAccess':
+      return handleMyAccess(state, manager);
+    case 'identity.getOwner':
+      return handleGetOwner(request, state, manager);
+    case 'identity.transferOwner':
+      return handleTransferOwner(request, state, manager);
+
     default:
       throw new NoexServerError(
         ErrorCode.UNKNOWN_OPERATION,
@@ -498,6 +512,146 @@ async function handleGetUserRoles(
   const userId = requireString(request, 'userId');
   const roles = await manager.getUserRoles(userId);
   return { roles };
+}
+
+// ── identity.grant ───────────────────────────────────────────────
+
+async function handleGrant(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  const session = requireAuth(state);
+
+  const subjectType = requireString(request, 'subjectType');
+  const subjectId = requireString(request, 'subjectId');
+  const resourceType = requireString(request, 'resourceType', 'resourceType');
+  const resourceName = requireString(request, 'resourceName');
+
+  if (!Array.isArray(request['operations'])) {
+    throw new NoexServerError(
+      ErrorCode.VALIDATION_ERROR,
+      'Missing or invalid "operations": expected non-empty array',
+    );
+  }
+
+  await manager.grant(session.userId, {
+    subjectType: subjectType as 'user' | 'role',
+    subjectId,
+    resourceType: resourceType as 'bucket' | 'topic' | 'procedure' | 'query',
+    resourceName,
+    operations: request['operations'] as string[],
+  });
+
+  return { granted: true };
+}
+
+// ── identity.revoke ──────────────────────────────────────────────
+
+async function handleRevoke(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  const session = requireAuth(state);
+
+  const subjectType = requireString(request, 'subjectType');
+  const subjectId = requireString(request, 'subjectId');
+  const resourceType = requireString(request, 'resourceType', 'resourceType');
+  const resourceName = requireString(request, 'resourceName');
+
+  const revokeInput: Record<string, unknown> = {
+    subjectType,
+    subjectId,
+    resourceType,
+    resourceName,
+  };
+  if (Array.isArray(request['operations'])) {
+    revokeInput['operations'] = request['operations'];
+  }
+
+  await manager.revoke(session.userId, revokeInput as {
+    subjectType: 'user' | 'role';
+    subjectId: string;
+    resourceType: 'bucket' | 'topic' | 'procedure' | 'query';
+    resourceName: string;
+    operations?: readonly string[];
+  });
+
+  return { revoked: true };
+}
+
+// ── identity.getAcl ──────────────────────────────────────────────
+
+async function handleGetAcl(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireAuth(state);
+
+  const resourceType = requireString(request, 'resourceType', 'resourceType');
+  const resourceName = requireString(request, 'resourceName');
+
+  const entries = await manager.getAcl(
+    resourceType as 'bucket' | 'topic' | 'procedure' | 'query',
+    resourceName,
+  );
+
+  return { entries };
+}
+
+// ── identity.myAccess ────────────────────────────────────────────
+
+async function handleMyAccess(
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  const session = requireAuth(state);
+  return manager.getEffectiveAccess(session.userId);
+}
+
+// ── identity.getOwner ────────────────────────────────────────────
+
+async function handleGetOwner(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  requireAuth(state);
+
+  const resourceType = requireString(request, 'resourceType', 'resourceType');
+  const resourceName = requireString(request, 'resourceName');
+
+  const owner = await manager.getOwner(
+    resourceType as 'bucket' | 'topic' | 'procedure' | 'query',
+    resourceName,
+  );
+
+  return { owner };
+}
+
+// ── identity.transferOwner ───────────────────────────────────────
+
+async function handleTransferOwner(
+  request: ClientRequest,
+  state: IdentityAuthState,
+  manager: IdentityManager,
+): Promise<unknown> {
+  const session = requireAuth(state);
+
+  const resourceType = requireString(request, 'resourceType', 'resourceType');
+  const resourceName = requireString(request, 'resourceName');
+  const newOwnerId = requireString(request, 'newOwnerId');
+
+  await manager.transferOwner(
+    session.userId,
+    resourceType as 'bucket' | 'topic' | 'procedure' | 'query',
+    resourceName,
+    newOwnerId,
+  );
+
+  return { transferred: true };
 }
 
 // ── Utilities ───────────────────────────────────────────────────
