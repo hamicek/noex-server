@@ -26,9 +26,18 @@ Build a complete e-commerce backend:
 - Production configuration (auth, rate limiting, heartbeat, backpressure)
 - Multi-bucket transactions for order processing
 
+### [12.4 Production Deployment](./04-production-deployment.md)
+
+Deploy noex-server to production:
+- TLS termination via reverse proxy (nginx, Caddy)
+- Audit log persistence to files and databases
+- Session persistence strategies (JWTs, external gateways)
+- Monitoring with `server.getStats()` and health checks
+- Graceful shutdown and deployment checklist
+
 ## What You'll Learn
 
-By the end of this section, you'll have built three complete projects that demonstrate how noex-server features work together in production.
+By the end of this section, you'll have built three complete projects and a production deployment guide that demonstrate how noex-server features work together in production.
 
 ---
 
