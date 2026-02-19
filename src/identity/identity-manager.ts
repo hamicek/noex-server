@@ -4,8 +4,13 @@ import type {
   RolePermission,
   RoleRecord,
   UserRecord,
+  UserInfo,
   UserRoleRecord,
   LoginResult,
+  CreateUserInput,
+  UpdateUserInput,
+  ListUsersOptions,
+  ListUsersResult,
 } from './identity-types.js';
 import {
   SUPERADMIN_USER_ID,
@@ -14,9 +19,13 @@ import {
 import type { AuthSession } from '../config.js';
 import { ensureSystemBuckets } from './system-buckets.js';
 import { SessionManager } from './session-manager.js';
-import { verifyPassword } from './password-hasher.js';
+import { hashPassword, verifyPassword } from './password-hasher.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
+
+const MIN_PASSWORD_LENGTH = 8;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 
 // ── System Role Definitions ──────────────────────────────────────
 //
@@ -264,6 +273,243 @@ export class IdentityManager {
     await this.#sessions.deleteUserSessions(userId);
   }
 
+  // ── User CRUD ─────────────────────────────────────────────────
+
+  /**
+   * Create a new user.
+   *
+   * Validates input, hashes password, and inserts into `_users`.
+   * Throws VALIDATION_ERROR for invalid input, ALREADY_EXISTS for duplicate username.
+   */
+  async createUser(input: CreateUserInput): Promise<UserInfo> {
+    const { username, password, displayName, email, enabled, metadata } = input;
+
+    if (typeof username !== 'string' || username.length < 3 || username.length > 64) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        'Username must be between 3 and 64 characters',
+      );
+    }
+
+    if (typeof password !== 'string' || password.length < MIN_PASSWORD_LENGTH) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      );
+    }
+
+    const existing = await this.#store.bucket('_users').where({ username });
+    if (existing.length > 0) {
+      throw new NoexServerError(
+        ErrorCode.ALREADY_EXISTS,
+        `User "${username}" already exists`,
+      );
+    }
+
+    const passwordHash = await hashPassword(password);
+
+    const data: Record<string, unknown> = {
+      username,
+      passwordHash,
+      enabled: enabled ?? true,
+    };
+    if (displayName !== undefined) data['displayName'] = displayName;
+    if (email !== undefined) data['email'] = email;
+    if (metadata !== undefined) data['metadata'] = metadata;
+
+    const record = await this.#store.bucket('_users').insert(data);
+    return stripPasswordHash(record as unknown as UserRecord);
+  }
+
+  /**
+   * Get a user by ID. Returns UserInfo (passwordHash stripped).
+   * Throws NOT_FOUND if the user does not exist.
+   */
+  async getUser(userId: string): Promise<UserInfo> {
+    const record = (await this.#store
+      .bucket('_users')
+      .get(userId)) as unknown as UserRecord | undefined;
+
+    if (record === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    return stripPasswordHash(record);
+  }
+
+  /**
+   * Update user profile fields (not password).
+   * Only displayName, email, and metadata can be updated.
+   * Throws NOT_FOUND if the user does not exist.
+   */
+  async updateUser(userId: string, updates: UpdateUserInput): Promise<UserInfo> {
+    const existing = (await this.#store
+      .bucket('_users')
+      .get(userId)) as unknown as UserRecord | undefined;
+
+    if (existing === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    const changes: Record<string, unknown> = {};
+    if (updates.displayName !== undefined) changes['displayName'] = updates.displayName;
+    if (updates.email !== undefined) changes['email'] = updates.email === null ? '' : updates.email;
+    if (updates.metadata !== undefined) changes['metadata'] = updates.metadata === null ? {} : updates.metadata;
+
+    if (Object.keys(changes).length === 0) {
+      return stripPasswordHash(existing);
+    }
+
+    const updated = await this.#store.bucket('_users').update(userId, changes);
+    return stripPasswordHash(updated as unknown as UserRecord);
+  }
+
+  /**
+   * Hard-delete a user.
+   * Deletes all sessions, user-role assignments, and ACL entries for the user.
+   * Throws NOT_FOUND if the user does not exist.
+   */
+  async deleteUser(userId: string): Promise<void> {
+    const existing = await this.#store.bucket('_users').get(userId);
+    if (existing === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    // Delete all sessions
+    await this.#sessions.deleteUserSessions(userId);
+
+    // Delete all user-role assignments
+    const userRoles = await this.#store.bucket('_user_roles').where({ userId });
+    for (const ur of userRoles) {
+      await this.#store.bucket('_user_roles').delete((ur as unknown as { id: string }).id);
+    }
+
+    // Delete all ACL entries where this user is the subject
+    const aclEntries = await this.#store.bucket('_acl').where({ subjectId: userId });
+    for (const entry of aclEntries) {
+      await this.#store.bucket('_acl').delete((entry as unknown as { id: string }).id);
+    }
+
+    // Delete the user record
+    await this.#store.bucket('_users').delete(userId);
+  }
+
+  /**
+   * List users with pagination (passwordHash stripped).
+   * Uses offset-based pagination via page/pageSize.
+   */
+  async listUsers(options?: ListUsersOptions): Promise<ListUsersResult> {
+    const page = Math.max(1, options?.page ?? 1);
+    const pageSize = Math.min(MAX_PAGE_SIZE, Math.max(1, options?.pageSize ?? DEFAULT_PAGE_SIZE));
+
+    const allUsers = (await this.#store
+      .bucket('_users')
+      .all()) as unknown as UserRecord[];
+
+    const total = allUsers.length;
+    const start = (page - 1) * pageSize;
+    const slice = allUsers.slice(start, start + pageSize);
+
+    return {
+      users: slice.map(stripPasswordHash),
+      total,
+      page,
+      pageSize,
+    };
+  }
+
+  /** Enable a user account. Throws NOT_FOUND if the user does not exist. */
+  async enableUser(userId: string): Promise<UserInfo> {
+    const existing = await this.#store.bucket('_users').get(userId);
+    if (existing === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    const updated = await this.#store.bucket('_users').update(userId, { enabled: true });
+    return stripPasswordHash(updated as unknown as UserRecord);
+  }
+
+  /** Disable a user account. Invalidates all sessions. Throws NOT_FOUND if the user does not exist. */
+  async disableUser(userId: string): Promise<UserInfo> {
+    const existing = await this.#store.bucket('_users').get(userId);
+    if (existing === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    const updated = await this.#store.bucket('_users').update(userId, { enabled: false });
+    await this.#sessions.deleteUserSessions(userId);
+    return stripPasswordHash(updated as unknown as UserRecord);
+  }
+
+  // ── Password Operations ──────────────────────────────────────
+
+  /**
+   * Change a user's password. Verifies the current password first.
+   * Invalidates all other sessions for the user.
+   *
+   * Throws UNAUTHORIZED if current password is wrong.
+   * Throws NOT_FOUND if the user does not exist.
+   * Throws VALIDATION_ERROR if the new password is too short.
+   */
+  async changePassword(
+    userId: string,
+    currentPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    if (typeof newPassword !== 'string' || newPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      );
+    }
+
+    const user = (await this.#store
+      .bucket('_users')
+      .get(userId)) as unknown as UserRecord | undefined;
+
+    if (user === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    const valid = await verifyPassword(currentPassword, user.passwordHash);
+    if (!valid) {
+      throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Current password is incorrect');
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await this.#store.bucket('_users').update(userId, { passwordHash: newHash });
+
+    // Invalidate all sessions for this user (forces re-login)
+    await this.#sessions.deleteUserSessions(userId);
+  }
+
+  /**
+   * Reset a user's password (admin operation — no current password verification).
+   * Invalidates all sessions for the user.
+   *
+   * Throws NOT_FOUND if the user does not exist.
+   * Throws VALIDATION_ERROR if the new password is too short.
+   */
+  async resetPassword(userId: string, newPassword: string): Promise<void> {
+    if (typeof newPassword !== 'string' || newPassword.length < MIN_PASSWORD_LENGTH) {
+      throw new NoexServerError(
+        ErrorCode.VALIDATION_ERROR,
+        `Password must be at least ${MIN_PASSWORD_LENGTH} characters`,
+      );
+    }
+
+    const user = await this.#store.bucket('_users').get(userId);
+    if (user === undefined) {
+      throw new NoexServerError(ErrorCode.NOT_FOUND, 'User not found');
+    }
+
+    const newHash = await hashPassword(newPassword);
+    await this.#store.bucket('_users').update(userId, { passwordHash: newHash });
+
+    // Invalidate all sessions (forces re-login with new password)
+    await this.#sessions.deleteUserSessions(userId);
+  }
+
   // ── Private ─────────────────────────────────────────────────────
 
   async #getUserRoleNames(userId: string): Promise<string[]> {
@@ -285,6 +531,11 @@ export class IdentityManager {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
+
+function stripPasswordHash(record: UserRecord): UserInfo {
+  const { passwordHash: _, _version: __, ...rest } = record;
+  return rest;
+}
 
 async function ensureSystemRoles(store: Store): Promise<void> {
   const rolesBucket = store.bucket('_roles');

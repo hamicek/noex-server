@@ -117,6 +117,35 @@ export interface ResourceOwnerRecord {
   readonly _updatedAt: number;
 }
 
+// ── User CRUD Inputs ────────────────────────────────────────────
+
+export interface CreateUserInput {
+  readonly username: string;
+  readonly password: string;
+  readonly displayName?: string;
+  readonly email?: string;
+  readonly enabled?: boolean;
+  readonly metadata?: Record<string, unknown>;
+}
+
+export interface UpdateUserInput {
+  readonly displayName?: string;
+  readonly email?: string | null;
+  readonly metadata?: Record<string, unknown> | null;
+}
+
+export interface ListUsersOptions {
+  readonly page?: number;
+  readonly pageSize?: number;
+}
+
+export interface ListUsersResult {
+  readonly users: readonly UserInfo[];
+  readonly total: number;
+  readonly page: number;
+  readonly pageSize: number;
+}
+
 // ── Login Result ────────────────────────────────────────────────
 
 export interface LoginResult {
