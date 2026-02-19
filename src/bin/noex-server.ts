@@ -338,8 +338,26 @@ async function main(): Promise<void> {
     db: resolve(config.db),
   });
 
+  // Eagerly validate adapter — fail fast if dependencies are missing
+  if (config.persistence !== 'memory') {
+    try {
+      await adapter.listKeys();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Error: Failed to initialize ${config.persistence} persistence: ${message}`);
+      process.exit(1);
+    }
+  }
+
   // Start store
-  const store = await Store.start({ persistence: { adapter } });
+  const store = await Store.start({
+    persistence: {
+      adapter,
+      onError: (error) => {
+        console.error(`[persistence] ${error.message}`);
+      },
+    },
+  });
 
   // Start rules engine (dynamic import — optional peer dep)
   let rules: RuleEngine | null = null;
