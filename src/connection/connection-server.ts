@@ -30,7 +30,7 @@ import { handleAdminRulesRequest } from '../proxy/admin-rules-proxy.js';
 import { handleProceduresRequest } from '../proxy/procedures-proxy.js';
 import { handleAuthRequest } from '../auth/auth-handler.js';
 import { handleIdentityRequest } from '../identity/identity-handler.js';
-import { checkPermissions } from '../auth/permissions.js';
+import { checkPermissions, extractResource } from '../auth/permissions.js';
 import { getOperationTier } from '../auth/operation-tiers.js';
 import { hasAccessForTier } from '../auth/role-hierarchy.js';
 import { isBackpressured } from '../lifecycle/backpressure.js';
@@ -323,7 +323,23 @@ function checkAuth(state: ConnectionState, request: ClientRequest): void {
     );
   }
 
-  // Tier check — enforce built-in role hierarchy for known operations
+  // Built-in identity mode: dynamic permission check via IdentityManager.
+  // This replaces the legacy tier check and custom permissions.
+  // Identity operations are excluded — they have their own auth in the handler.
+  if (identityManager !== null) {
+    if (state.session !== null && !type.startsWith('identity.')) {
+      const resource = extractResource(request);
+      if (!identityManager.isAllowed(state.session.userId, type, resource)) {
+        throw new NoexServerError(
+          ErrorCode.FORBIDDEN,
+          `No access to ${type} on ${resource}`,
+        );
+      }
+    }
+    return;
+  }
+
+  // Legacy external auth: tier check + custom permissions
   if (auth !== null && state.session !== null) {
     const tier = getOperationTier(type);
     if (tier !== null && !hasAccessForTier(state.session.roles, tier)) {
@@ -422,6 +438,20 @@ async function handleStoreOperation(
   request: ClientRequest,
   state: ConnectionState,
 ): Promise<unknown> {
+  // System bucket guard: block direct access to _* buckets when built-in auth is active
+  if (state.config.identityManager !== null) {
+    checkSystemBucketAccess(request);
+  }
+
+  // Filter system buckets from store.buckets response
+  if (request.type === 'store.buckets' && state.config.identityManager !== null) {
+    const stats = await state.config.store.getStats();
+    const names = (stats.buckets.names as string[]).filter(
+      (n) => !n.startsWith('_'),
+    );
+    return { count: names.length, names };
+  }
+
   if (request.type === 'store.subscribe') {
     checkSubscriptionLimit(state);
     const result = await handleStoreSubscribe(
@@ -690,6 +720,40 @@ function extractAuditResource(request: ClientRequest): string {
   if (typeof request['key'] === 'string') return request['key'];
   if (typeof request['pattern'] === 'string') return request['pattern'];
   return '*';
+}
+
+// ── Internal: System Bucket Guard ────────────────────────────────
+
+function checkSystemBucketAccess(request: ClientRequest): void {
+  // Check 'bucket' field (data operations: get, insert, where, etc.)
+  const bucket = request['bucket'];
+  if (typeof bucket === 'string' && bucket.startsWith('_')) {
+    throw new NoexServerError(
+      ErrorCode.FORBIDDEN,
+      `Cannot access system bucket "${bucket}" directly`,
+    );
+  }
+
+  // Check 'name' field (admin operations: defineBucket, dropBucket, etc.)
+  const name = request['name'];
+  if (typeof name === 'string' && name.startsWith('_')) {
+    throw new NoexServerError(
+      ErrorCode.FORBIDDEN,
+      `Cannot access system bucket "${name}" directly`,
+    );
+  }
+
+  // Check buckets inside transactions
+  if (request.type === 'store.transaction' && Array.isArray(request['operations'])) {
+    for (const op of request['operations'] as Array<Record<string, unknown>>) {
+      if (typeof op['bucket'] === 'string' && op['bucket'].startsWith('_')) {
+        throw new NoexServerError(
+          ErrorCode.FORBIDDEN,
+          `Cannot access system bucket "${op['bucket']}" in transaction`,
+        );
+      }
+    }
+  }
 }
 
 // ── Internal: Utility ─────────────────────────────────────────────

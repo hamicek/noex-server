@@ -21,6 +21,7 @@ import {
 } from './identity-types.js';
 import type { AuthSession } from '../config.js';
 import { ensureSystemBuckets } from './system-buckets.js';
+import { IdentityCache } from './identity-cache.js';
 import { SessionManager } from './session-manager.js';
 import { hashPassword, verifyPassword } from './password-hasher.js';
 import { ErrorCode } from '../protocol/codes.js';
@@ -93,11 +94,13 @@ export class IdentityManager {
   readonly #store: Store;
   readonly #config: IdentityConfig;
   readonly #sessions: SessionManager;
+  readonly #cache: IdentityCache;
 
-  private constructor(store: Store, config: IdentityConfig) {
+  private constructor(store: Store, config: IdentityConfig, cache: IdentityCache) {
     this.#store = store;
     this.#config = config;
     this.#sessions = new SessionManager(store, config.sessionTtlMs);
+    this.#cache = cache;
   }
 
   /** The store instance used by this manager. */
@@ -119,12 +122,13 @@ export class IdentityManager {
   static async start(store: Store, config: IdentityConfig): Promise<IdentityManager> {
     await ensureSystemBuckets(store);
     await ensureSystemRoles(store);
-    return new IdentityManager(store, config);
+    const cache = await IdentityCache.start(store);
+    return new IdentityManager(store, config, cache);
   }
 
-  /** Graceful shutdown — currently a no-op but reserved for future cleanup. */
+  /** Graceful shutdown — unsubscribes from cache invalidation. */
   async stop(): Promise<void> {
-    // Future: unsubscribe from cache invalidation, etc.
+    await this.#cache.stop();
   }
 
   // ── Auth ────────────────────────────────────────────────────────
@@ -716,6 +720,61 @@ export class IdentityManager {
     return allRoles.filter((r) => roleIds.has(r.id)).map(stripRoleVersion);
   }
 
+  // ── Permission Check ─────────────────────────────────────────────
+
+  /**
+   * Synchronous permission check using the in-memory cache.
+   *
+   * Algorithm (first match wins):
+   * 1. superadmin → allow
+   * 2. User ACL on resource → check
+   * 3. Role ACL on resource → check
+   * 4. Ownership → allow
+   * 5. Role permissions → check
+   * 6. Default: deny
+   */
+  isAllowed(userId: string, operation: string, resource: string): boolean {
+    const roleNames = this.#cache.getUserRoleNames(userId);
+
+    // 1. Superadmin bypass
+    if (roleNames.includes('superadmin')) return true;
+
+    const resourceType = deriveResourceType(operation);
+    const aclOperation = OPERATION_TO_ACL[operation] ?? null;
+    const hasSpecificResource = resourceType !== null && resource !== '*';
+
+    // 2. Explicit user ACL on resource
+    if (hasSpecificResource && aclOperation !== null) {
+      const userAcl = this.#cache.getUserAcl(userId, resourceType, resource);
+      if (userAcl !== null && userAcl.includes(aclOperation)) return true;
+    }
+
+    // 3. Role ACL on resource
+    if (hasSpecificResource && aclOperation !== null) {
+      const roleIds = this.#cache.getUserRoleIds(userId);
+      for (const roleId of roleIds) {
+        const roleAcl = this.#cache.getRoleAcl(roleId, resourceType, resource);
+        if (roleAcl !== null && roleAcl.includes(aclOperation)) return true;
+      }
+    }
+
+    // 4. Ownership — owner has full access to their resource
+    if (hasSpecificResource) {
+      if (this.#cache.isOwner(userId, resourceType, resource)) return true;
+    }
+
+    // 5. Role permissions (from _roles.permissions)
+    const roles = this.#cache.getUserRoles(userId);
+    for (const role of roles) {
+      if (rolePermissionsAllow(role.permissions, operation, resourceType, resource)) {
+        return true;
+      }
+    }
+
+    // 6. Default: deny
+    return false;
+  }
+
   // ── Private ─────────────────────────────────────────────────────
 
   async #getUserRoleNames(userId: string): Promise<string[]> {
@@ -747,6 +806,128 @@ function stripRoleVersion(record: RoleRecord): RoleInfo {
   const { _version: _, ...rest } = record;
   return rest;
 }
+
+// ── Operation → ACL Mapping ──────────────────────────────────────
+//
+// Maps protocol operations to abstract ACL operations (read/write/admin).
+// Used by isAllowed() to match against ACL entries.
+
+const OPERATION_TO_ACL: Readonly<Record<string, string>> = {
+  // Store — read
+  'store.get': 'read',
+  'store.all': 'read',
+  'store.where': 'read',
+  'store.findOne': 'read',
+  'store.count': 'read',
+  'store.first': 'read',
+  'store.last': 'read',
+  'store.paginate': 'read',
+  'store.sum': 'read',
+  'store.avg': 'read',
+  'store.min': 'read',
+  'store.max': 'read',
+  'store.subscribe': 'read',
+  'store.unsubscribe': 'read',
+  'store.buckets': 'read',
+  'store.stats': 'read',
+  // Store — write
+  'store.insert': 'write',
+  'store.update': 'write',
+  'store.delete': 'write',
+  'store.clear': 'write',
+  'store.transaction': 'write',
+  // Store — admin
+  'store.defineBucket': 'admin',
+  'store.dropBucket': 'admin',
+  'store.updateBucket': 'admin',
+  'store.getBucketSchema': 'admin',
+  'store.defineQuery': 'admin',
+  'store.undefineQuery': 'admin',
+  'store.listQueries': 'admin',
+
+  // Rules — read
+  'rules.getFact': 'read',
+  'rules.queryFacts': 'read',
+  'rules.getAllFacts': 'read',
+  'rules.subscribe': 'read',
+  'rules.unsubscribe': 'read',
+  'rules.stats': 'read',
+  // Rules — write
+  'rules.emit': 'write',
+  'rules.setFact': 'write',
+  'rules.deleteFact': 'write',
+  // Rules — admin
+  'rules.registerRule': 'admin',
+  'rules.unregisterRule': 'admin',
+  'rules.updateRule': 'admin',
+  'rules.enableRule': 'admin',
+  'rules.disableRule': 'admin',
+  'rules.getRule': 'admin',
+  'rules.getRules': 'admin',
+  'rules.validateRule': 'admin',
+
+  // Procedures
+  'procedures.get': 'read',
+  'procedures.call': 'write',
+  'procedures.register': 'admin',
+  'procedures.unregister': 'admin',
+  'procedures.update': 'admin',
+  'procedures.list': 'admin',
+
+  // Server / Audit
+  'server.stats': 'admin',
+  'server.connections': 'admin',
+  'audit.query': 'admin',
+};
+
+function deriveResourceType(operation: string): string | null {
+  if (operation.startsWith('store.')) return 'bucket';
+  if (operation.startsWith('rules.')) return 'topic';
+  if (operation.startsWith('procedures.')) return 'procedure';
+  return null;
+}
+
+// ── Role Permission Matching ─────────────────────────────────────
+
+function rolePermissionsAllow(
+  permissions: readonly RolePermission[],
+  operation: string,
+  resourceType: string | null,
+  resource: string,
+): boolean {
+  for (const perm of permissions) {
+    if (!operationMatchesPermission(operation, perm.allow)) continue;
+
+    // Check resource constraints
+    if (resourceType === 'bucket' && perm.buckets !== undefined) {
+      if (!perm.buckets.includes(resource)) continue;
+    }
+    if (resourceType === 'topic' && perm.topics !== undefined) {
+      if (!perm.topics.some((t) => matchWildcard(t, resource))) continue;
+    }
+
+    return true;
+  }
+  return false;
+}
+
+function operationMatchesPermission(
+  operation: string,
+  allow: string | readonly string[],
+): boolean {
+  const patterns = typeof allow === 'string' ? [allow] : allow;
+  return patterns.some((pattern) => matchWildcard(pattern, operation));
+}
+
+function matchWildcard(pattern: string, value: string): boolean {
+  if (pattern === '*') return true;
+  if (pattern.endsWith('.*')) {
+    return value.startsWith(pattern.slice(0, -1));
+  }
+  return pattern === value;
+}
+
+// ── System Role Seeding ──────────────────────────────────────────
 
 async function ensureSystemRoles(store: Store): Promise<void> {
   const rolesBucket = store.bucket('_roles');
