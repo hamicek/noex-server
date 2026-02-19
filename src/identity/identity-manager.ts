@@ -33,6 +33,7 @@ import { ensureSystemBuckets } from './system-buckets.js';
 import { IdentityCache } from './identity-cache.js';
 import { SessionManager } from './session-manager.js';
 import { hashPassword, verifyPassword } from './password-hasher.js';
+import { LoginRateLimiter } from './login-rate-limiter.js';
 import { ErrorCode } from '../protocol/codes.js';
 import { NoexServerError } from '../errors.js';
 
@@ -104,12 +105,17 @@ export class IdentityManager {
   readonly #config: IdentityConfig;
   readonly #sessions: SessionManager;
   readonly #cache: IdentityCache;
+  readonly #loginLimiter: LoginRateLimiter;
 
   private constructor(store: Store, config: IdentityConfig, cache: IdentityCache) {
     this.#store = store;
     this.#config = config;
     this.#sessions = new SessionManager(store, config.sessionTtlMs);
     this.#cache = cache;
+    this.#loginLimiter = new LoginRateLimiter(
+      config.loginRateLimit?.maxAttempts,
+      config.loginRateLimit?.windowMs,
+    );
   }
 
   /** The store instance used by this manager. */
@@ -155,38 +161,54 @@ export class IdentityManager {
     password: string,
     meta?: { ip?: string; userAgent?: string },
   ): Promise<LoginResult> {
-    const users = (await this.#store
-      .bucket('_users')
-      .where({ username })) as unknown as UserRecord[];
+    const userKey = `user:${username}`;
+    const ipKey = meta?.ip ? `ip:${meta.ip}` : null;
 
-    if (users.length === 0) {
-      throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Invalid credentials');
+    this.#loginLimiter.check(userKey);
+    if (ipKey !== null) this.#loginLimiter.check(ipKey);
+
+    try {
+      const users = (await this.#store
+        .bucket('_users')
+        .where({ username })) as unknown as UserRecord[];
+
+      if (users.length === 0) {
+        throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Invalid credentials');
+      }
+
+      const user = users[0]!;
+
+      if (!user.enabled) {
+        throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Account disabled');
+      }
+
+      const valid = await verifyPassword(password, user.passwordHash);
+      if (!valid) {
+        throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Invalid credentials');
+      }
+
+      const roles = await this.#getUserRoleNames(user.id);
+      const session = await this.#sessions.createSession(user.id, meta);
+
+      this.#loginLimiter.reset(userKey);
+
+      return {
+        token: session.id,
+        expiresAt: session.expiresAt,
+        user: {
+          id: user.id,
+          username: user.username,
+          ...(user.displayName !== undefined ? { displayName: user.displayName } : {}),
+          roles,
+        },
+      };
+    } catch (error) {
+      if (error instanceof NoexServerError && error.code === ErrorCode.UNAUTHORIZED) {
+        this.#loginLimiter.recordFailure(userKey);
+        if (ipKey !== null) this.#loginLimiter.recordFailure(ipKey);
+      }
+      throw error;
     }
-
-    const user = users[0]!;
-
-    if (!user.enabled) {
-      throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Account disabled');
-    }
-
-    const valid = await verifyPassword(password, user.passwordHash);
-    if (!valid) {
-      throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Invalid credentials');
-    }
-
-    const roles = await this.#getUserRoleNames(user.id);
-    const session = await this.#sessions.createSession(user.id, meta);
-
-    return {
-      token: session.id,
-      expiresAt: session.expiresAt,
-      user: {
-        id: user.id,
-        username: user.username,
-        ...(user.displayName !== undefined ? { displayName: user.displayName } : {}),
-        roles,
-      },
-    };
   }
 
   /**
@@ -197,9 +219,16 @@ export class IdentityManager {
     secret: string,
     meta?: { ip?: string; userAgent?: string },
   ): Promise<LoginResult> {
+    const ipKey = meta?.ip ? `ip:${meta.ip}` : null;
+
+    if (ipKey !== null) this.#loginLimiter.check(ipKey);
+
     if (secret !== this.#config.adminSecret) {
+      if (ipKey !== null) this.#loginLimiter.recordFailure(ipKey);
       throw new NoexServerError(ErrorCode.UNAUTHORIZED, 'Invalid secret');
     }
+
+    if (ipKey !== null) this.#loginLimiter.reset(ipKey);
 
     const session = await this.#sessions.createSession(SUPERADMIN_USER_ID, meta);
 

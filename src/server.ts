@@ -125,6 +125,7 @@ export class NoexServer {
       identityManager = await IdentityManager.start(config.store, {
         adminSecret: config.auth.adminSecret,
         ...(config.auth.sessionTtl !== undefined ? { sessionTtlMs: config.auth.sessionTtl } : {}),
+        ...(config.auth.loginRateLimit !== undefined ? { loginRateLimit: config.auth.loginRateLimit } : {}),
       });
 
       // Synthesize an AuthConfig so auth.login works for token-based reconnect.

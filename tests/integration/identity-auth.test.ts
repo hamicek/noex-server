@@ -711,4 +711,154 @@ describe('Integration: Identity Auth', () => {
       expect(resp2['code']).toBe('UNAUTHORIZED');
     });
   });
+
+  // ── Login rate limiting ────────────────────────────────────────
+
+  describe('login rate limiting', () => {
+    it('locks out after maxAttempts failed logins', async () => {
+      await setup({ loginRateLimit: { maxAttempts: 3, windowMs: 60_000 } });
+      await insertTestUser('alice', 'correct-pass');
+      const { ws } = await connectClient(server!.port);
+      clients.push(ws);
+
+      // 3 failed attempts
+      for (let i = 0; i < 3; i++) {
+        const resp = await sendRequest(ws, {
+          type: 'identity.login',
+          username: 'alice',
+          password: 'wrong',
+        });
+        expect(resp['type']).toBe('error');
+        expect(resp['code']).toBe('UNAUTHORIZED');
+      }
+
+      // 4th attempt: even correct password should be rate-limited
+      const resp = await sendRequest(ws, {
+        type: 'identity.login',
+        username: 'alice',
+        password: 'correct-pass',
+      });
+      expect(resp['type']).toBe('error');
+      expect(resp['code']).toBe('RATE_LIMITED');
+      expect(resp['details']).toHaveProperty('retryAfterMs');
+    });
+
+    it('successful login resets username counter', async () => {
+      await setup({ loginRateLimit: { maxAttempts: 3, windowMs: 60_000 } });
+      await insertTestUser('alice', 'correct-pass');
+      const { ws } = await connectClient(server!.port);
+      clients.push(ws);
+
+      // 2 failed attempts (under limit)
+      for (let i = 0; i < 2; i++) {
+        await sendRequest(ws, {
+          type: 'identity.login',
+          username: 'alice',
+          password: 'wrong',
+        });
+      }
+
+      // Successful login
+      const loginResp = await sendRequest(ws, {
+        type: 'identity.login',
+        username: 'alice',
+        password: 'correct-pass',
+      });
+      expect(loginResp['type']).toBe('result');
+
+      // Logout and try again — counter should be reset
+      await sendRequest(ws, { type: 'identity.logout' });
+
+      // Another 2 failed attempts (would be 4 total if not reset)
+      for (let i = 0; i < 2; i++) {
+        const resp = await sendRequest(ws, {
+          type: 'identity.login',
+          username: 'alice',
+          password: 'wrong',
+        });
+        expect(resp['type']).toBe('error');
+        expect(resp['code']).toBe('UNAUTHORIZED');
+      }
+
+      // Should still work (2 < 3)
+      const resp = await sendRequest(ws, {
+        type: 'identity.login',
+        username: 'alice',
+        password: 'correct-pass',
+      });
+      expect(resp['type']).toBe('result');
+    });
+
+    it('rate limiting on loginWithSecret', async () => {
+      await setup({ loginRateLimit: { maxAttempts: 2, windowMs: 60_000 } });
+      const { ws } = await connectClient(server!.port);
+      clients.push(ws);
+
+      // 2 failed attempts
+      for (let i = 0; i < 2; i++) {
+        const resp = await sendRequest(ws, {
+          type: 'identity.loginWithSecret',
+          secret: 'wrong-secret',
+        });
+        expect(resp['type']).toBe('error');
+        expect(resp['code']).toBe('UNAUTHORIZED');
+      }
+
+      // 3rd attempt: rate limited
+      const resp = await sendRequest(ws, {
+        type: 'identity.loginWithSecret',
+        secret: ADMIN_SECRET,
+      });
+      expect(resp['type']).toBe('error');
+      expect(resp['code']).toBe('RATE_LIMITED');
+    });
+
+    it('lockout expires after windowMs', async () => {
+      await setup({ loginRateLimit: { maxAttempts: 2, windowMs: 100 } });
+      await insertTestUser('alice', 'correct-pass');
+      const { ws } = await connectClient(server!.port);
+      clients.push(ws);
+
+      // 2 failed attempts → lockout
+      for (let i = 0; i < 2; i++) {
+        await sendRequest(ws, {
+          type: 'identity.login',
+          username: 'alice',
+          password: 'wrong',
+        });
+      }
+
+      const blocked = await sendRequest(ws, {
+        type: 'identity.login',
+        username: 'alice',
+        password: 'correct-pass',
+      });
+      expect(blocked['code']).toBe('RATE_LIMITED');
+
+      // Wait for window to expire
+      await flush(200);
+
+      // Should work now
+      const resp = await sendRequest(ws, {
+        type: 'identity.login',
+        username: 'alice',
+        password: 'correct-pass',
+      });
+      expect(resp['type']).toBe('result');
+    });
+
+    it('normal login works with default rate limit config', async () => {
+      await setup(); // default rate limit enabled
+      await insertTestUser('alice', 'correct-pass');
+      const { ws } = await connectClient(server!.port);
+      clients.push(ws);
+
+      const resp = await sendRequest(ws, {
+        type: 'identity.login',
+        username: 'alice',
+        password: 'correct-pass',
+      });
+      expect(resp['type']).toBe('result');
+    });
+  });
 });

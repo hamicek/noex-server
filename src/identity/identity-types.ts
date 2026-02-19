@@ -240,6 +240,14 @@ export interface IdentityConfig {
 
   /** Session token TTL in milliseconds. Default: 24 hours. */
   readonly sessionTtlMs?: number;
+
+  /** Login rate limiting (brute-force protection). */
+  readonly loginRateLimit?: {
+    /** Maximum failed attempts before lockout. Default: 5. */
+    readonly maxAttempts?: number;
+    /** Time window in milliseconds. Default: 15 minutes. */
+    readonly windowMs?: number;
+  };
 }
 
 // ── System Role Names ────────────────────────────────────────────

@@ -11,6 +11,7 @@ export interface IdentityAuthState {
   session: AuthSession | null;
   authenticated: boolean;
   sessionToken: string | null;
+  readonly remoteAddress?: string;
 }
 
 // ── Authorization helpers ───────────────────────────────────────
@@ -142,7 +143,10 @@ async function handleLogin(
   const username = requireString(request, 'username');
   const password = requireString(request, 'password');
 
-  const result = await manager.login(username, password);
+  const meta = state.remoteAddress !== undefined
+    ? { ip: state.remoteAddress }
+    : undefined;
+  const result = await manager.login(username, password, meta);
 
   state.session = {
     userId: result.user.id,
@@ -163,7 +167,10 @@ async function handleLoginWithSecret(
   manager: IdentityManager,
 ): Promise<unknown> {
   const secret = requireString(request, 'secret');
-  const result = await manager.loginWithSecret(secret);
+  const secretMeta = state.remoteAddress !== undefined
+    ? { ip: state.remoteAddress }
+    : undefined;
+  const result = await manager.loginWithSecret(secret, secretMeta);
 
   state.session = {
     userId: result.user.id,
