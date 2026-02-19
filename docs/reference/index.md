@@ -27,6 +27,7 @@ Complete API reference for `@hamicek/noex-server`. Every class, method, type, co
 | [Types](./09-types.md) | Shared types — ServerStats, ConnectionsStats, ConnectionInfo, ConnectionMetadata |
 | [Errors](./10-errors.md) | ErrorCode enum, NoexServerError class, error response format |
 | [Audit](./11-audit.md) | Audit log — operation tiers, audit.query, external persistence |
+| [Built-in Identity](./12-built-in-auth.md) | Built-in auth — 27 identity operations, users, roles, ACL, ownership |
 
 ## Quick Links
 
