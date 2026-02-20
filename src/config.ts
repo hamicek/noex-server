@@ -176,6 +176,14 @@ export interface ServerConfig {
   readonly name?: string;
 
   /**
+   * Whether to include error details (e.g. bucket, field, value from
+   * UniqueConstraintError) in error responses sent to clients.
+   * Default: true (dev-friendly). Set to false in production to avoid
+   * leaking internal schema information.
+   */
+  readonly exposeErrorDetails?: boolean;
+
+  /**
    * Allowed origins for WebSocket connections. When set, the server validates
    * the Origin header during the HTTP upgrade and rejects connections from
    * unknown origins with 403 Forbidden.
@@ -216,6 +224,7 @@ export interface ResolvedServerConfig {
   readonly procedureEngine: ProcedureEngine | null;
   readonly identityManager: IdentityManager | null;
   readonly name: string;
+  readonly exposeErrorDetails: boolean;
   readonly allowedOrigins: readonly string[] | null;
   readonly maxConnectionsPerIp: number | null;
 }
@@ -252,6 +261,7 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     procedureEngine: null,
     identityManager: null,
     name: config.name ?? DEFAULT_NAME,
+    exposeErrorDetails: config.exposeErrorDetails ?? true,
     allowedOrigins: config.allowedOrigins ?? null,
     maxConnectionsPerIp: config.maxConnectionsPerIp ?? null,
   };

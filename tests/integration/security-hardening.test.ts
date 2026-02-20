@@ -344,4 +344,143 @@ describe('Integration: Security Hardening', () => {
       expect(resp['type']).toBe('result');
     });
   });
+
+  // ── Error Detail Sanitization ────────────────────────────────
+
+  describe('error detail sanitization', () => {
+    it('strips error details when exposeErrorDetails is false', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('items', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          name: { type: 'string', required: true },
+        },
+      });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        exposeErrorDetails: false,
+      });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+
+      // Trigger a ValidationError by omitting the required 'name' field
+      const resp = await sendRequest(ws, {
+        type: 'store.insert',
+        bucket: 'items',
+        data: {},
+      });
+
+      expect(resp['type']).toBe('error');
+      expect(resp['code']).toBe('VALIDATION_ERROR');
+      expect(resp['message']).toEqual(expect.any(String));
+      expect(resp['details']).toBeUndefined();
+    });
+
+    it('includes error details when exposeErrorDetails is true', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('items', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          name: { type: 'string', required: true },
+        },
+      });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        exposeErrorDetails: true,
+      });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+
+      const resp = await sendRequest(ws, {
+        type: 'store.insert',
+        bucket: 'items',
+        data: {},
+      });
+
+      expect(resp['type']).toBe('error');
+      expect(resp['code']).toBe('VALIDATION_ERROR');
+      expect(resp['details']).toBeDefined();
+      expect(Array.isArray(resp['details'])).toBe(true);
+    });
+
+    it('includes error details by default (backward compatibility)', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('items', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          name: { type: 'string', required: true },
+        },
+      });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        // no exposeErrorDetails — defaults to true
+      });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+
+      const resp = await sendRequest(ws, {
+        type: 'store.insert',
+        bucket: 'items',
+        data: {},
+      });
+
+      expect(resp['type']).toBe('error');
+      expect(resp['code']).toBe('VALIDATION_ERROR');
+      expect(resp['details']).toBeDefined();
+      expect(Array.isArray(resp['details'])).toBe(true);
+    });
+
+    it('preserves error message even when details are stripped', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('unique_items', {
+        key: 'id',
+        schema: {
+          id: { type: 'string' },
+          email: { type: 'string', required: true, unique: true },
+        },
+      });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        exposeErrorDetails: false,
+      });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+
+      // Insert first record
+      await sendRequest(ws, {
+        type: 'store.insert',
+        bucket: 'unique_items',
+        data: { id: 'a', email: 'dup@test.com' },
+      });
+
+      // Insert duplicate — triggers UniqueConstraintError with details
+      const resp = await sendRequest(ws, {
+        type: 'store.insert',
+        bucket: 'unique_items',
+        data: { id: 'b', email: 'dup@test.com' },
+      });
+
+      expect(resp['type']).toBe('error');
+      expect(resp['code']).toBe('ALREADY_EXISTS');
+      expect(resp['message']).toEqual(expect.any(String));
+      expect(resp['message']).not.toBe('');
+      // Details (bucket, field, value) must NOT be exposed
+      expect(resp['details']).toBeUndefined();
+    });
+  });
 });

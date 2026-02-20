@@ -97,6 +97,7 @@ describe('resolveConfig', () => {
       procedureEngine: null,
       identityManager: null,
       name: 'noex-server',
+      exposeErrorDetails: true,
       allowedOrigins: null,
       maxConnectionsPerIp: null,
     });

@@ -219,9 +219,12 @@ async function handleWsMessage(
     logAudit(state, request, 'success');
   } catch (error) {
     if (error instanceof NoexServerError) {
+      const details = state.config.exposeErrorDetails
+        ? error.details
+        : undefined;
       sendRaw(
         state.ws,
-        serializeError(request.id, error.code, error.message, error.details),
+        serializeError(request.id, error.code, error.message, details),
       );
       logAudit(state, request, 'error', error.message);
     } else {
