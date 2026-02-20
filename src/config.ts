@@ -174,6 +174,16 @@ export interface ServerConfig {
 
   /** Server name used for registry and logging. Default: 'noex-server'. */
   readonly name?: string;
+
+  /**
+   * Allowed origins for WebSocket connections. When set, the server validates
+   * the Origin header during the HTTP upgrade and rejects connections from
+   * unknown origins with 403 Forbidden.
+   *
+   * Connections without an Origin header (e.g. server-to-server) are always
+   * allowed. When undefined, origin validation is disabled (suitable for dev).
+   */
+  readonly allowedOrigins?: readonly string[];
 }
 
 // ── Resolved Config (all defaults applied) ────────────────────────
@@ -197,6 +207,7 @@ export interface ResolvedServerConfig {
   readonly procedureEngine: ProcedureEngine | null;
   readonly identityManager: IdentityManager | null;
   readonly name: string;
+  readonly allowedOrigins: readonly string[] | null;
 }
 
 // ── Resolve ───────────────────────────────────────────────────────
@@ -231,5 +242,6 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     procedureEngine: null,
     identityManager: null,
     name: config.name ?? DEFAULT_NAME,
+    allowedOrigins: config.allowedOrigins ?? null,
   };
 }

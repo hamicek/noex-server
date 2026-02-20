@@ -9,14 +9,35 @@ let requestIdCounter = 1;
 
 function connectClient(
   port: number,
+  options?: { headers?: Record<string, string> },
 ): Promise<{ ws: WebSocket; welcome: Record<string, unknown> }> {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+      ...(options?.headers !== undefined ? { headers: options.headers } : {}),
+    });
     ws.once('message', (data) => {
       const welcome = JSON.parse(data.toString()) as Record<string, unknown>;
       resolve({ ws, welcome });
     });
     ws.once('error', reject);
+  });
+}
+
+function expectConnectionRejected(
+  port: number,
+  options?: { headers?: Record<string, string> },
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+      ...(options?.headers !== undefined ? { headers: options.headers } : {}),
+    });
+    ws.once('open', () => {
+      ws.close();
+      reject(new Error('Expected connection to be rejected'));
+    });
+    ws.once('error', () => {
+      resolve();
+    });
   });
 }
 
@@ -124,6 +145,94 @@ describe('Integration: Security Hardening', () => {
       });
 
       expect(resp['type']).toBe('result');
+    });
+  });
+
+  // ── Origin Validation ──────────────────────────────────────────
+
+  describe('origin validation', () => {
+    it('allows connection with a permitted origin', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        allowedOrigins: ['https://app.example.com'],
+      });
+
+      const { ws, welcome } = await connectClient(server.port, {
+        headers: { Origin: 'https://app.example.com' },
+      });
+      clients.push(ws);
+
+      expect(welcome['type']).toBe('welcome');
+    });
+
+    it('rejects connection with a disallowed origin', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        allowedOrigins: ['https://app.example.com'],
+      });
+
+      await expectConnectionRejected(server.port, {
+        headers: { Origin: 'https://evil.example.com' },
+      });
+    });
+
+    it('allows connection without Origin header (server-to-server)', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        allowedOrigins: ['https://app.example.com'],
+      });
+
+      // ws library does not send Origin by default — simulates a server-to-server client
+      const { ws, welcome } = await connectClient(server.port);
+      clients.push(ws);
+
+      expect(welcome['type']).toBe('welcome');
+    });
+
+    it('skips origin check when allowedOrigins is not configured', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        // no allowedOrigins — validation disabled
+      });
+
+      const { ws, welcome } = await connectClient(server.port, {
+        headers: { Origin: 'https://any-origin.example.com' },
+      });
+      clients.push(ws);
+
+      expect(welcome['type']).toBe('welcome');
+    });
+
+    it('supports multiple allowed origins', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        allowedOrigins: ['https://app1.example.com', 'https://app2.example.com'],
+      });
+
+      const { ws: ws1, welcome: w1 } = await connectClient(server.port, {
+        headers: { Origin: 'https://app2.example.com' },
+      });
+      clients.push(ws1);
+      expect(w1['type']).toBe('welcome');
+
+      await expectConnectionRejected(server.port, {
+        headers: { Origin: 'https://app3.example.com' },
+      });
     });
   });
 });

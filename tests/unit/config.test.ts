@@ -97,6 +97,7 @@ describe('resolveConfig', () => {
       procedureEngine: null,
       identityManager: null,
       name: 'noex-server',
+      allowedOrigins: null,
     });
   });
 

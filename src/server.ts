@@ -167,6 +167,17 @@ export class NoexServer {
           return;
         }
 
+        // Origin validation: reject browser connections from disallowed origins.
+        // Non-browser clients (server-to-server) omit the Origin header — always allow.
+        if (resolvedFull.allowedOrigins !== null) {
+          const origin = request.headers['origin'];
+          if (origin !== undefined && !resolvedFull.allowedOrigins.includes(origin)) {
+            socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+            socket.destroy();
+            return;
+          }
+        }
+
         wss.handleUpgrade(request, socket, head, (ws) => {
           wss.emit('connection', ws, request);
         });
