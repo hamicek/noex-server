@@ -64,6 +64,7 @@ describe('config defaults', () => {
   it('has correct default connection limits', () => {
     expect(DEFAULT_CONNECTION_LIMITS).toEqual({
       maxSubscriptionsPerConnection: 100,
+      maxTotalSubscriptions: 10_000,
     });
   });
 });
@@ -91,7 +92,7 @@ describe('resolveConfig', () => {
       connectionRegistry: null,
       heartbeat: { intervalMs: 30_000, timeoutMs: 10_000 },
       backpressure: { maxBufferedBytes: 1_048_576, highWaterMark: 0.8 },
-      connectionLimits: { maxSubscriptionsPerConnection: 100 },
+      connectionLimits: { maxSubscriptionsPerConnection: 100, maxTotalSubscriptions: 10_000 },
       auditLog: null,
       blacklist: null,
       procedureEngine: null,
@@ -225,6 +226,7 @@ describe('resolveConfig', () => {
     const resolved = resolveConfig({ store: mockStore });
     expect(resolved.connectionLimits).toEqual({
       maxSubscriptionsPerConnection: 100,
+      maxTotalSubscriptions: 10_000,
     });
   });
 

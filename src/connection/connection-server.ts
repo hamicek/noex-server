@@ -40,6 +40,7 @@ import {
   updateConnectionAuth,
   updateConnectionSubscriptions,
   getConnections as getRegistryConnections,
+  getTotalSubscriptionCount,
 } from './connection-registry.js';
 
 // ── State ─────────────────────────────────────────────────────────
@@ -441,6 +442,17 @@ function checkSubscriptionLimit(state: ConnectionState): void {
   }
 }
 
+function checkGlobalSubscriptionLimit(state: ConnectionState): void {
+  const max = state.config.connectionLimits.maxTotalSubscriptions;
+  const total = getTotalSubscriptionCount(state.config.connectionRegistry);
+  if (total >= max) {
+    throw new NoexServerError(
+      ErrorCode.RATE_LIMITED,
+      `Global subscription limit reached (max ${max})`,
+    );
+  }
+}
+
 async function handleStoreOperation(
   request: ClientRequest,
   state: ConnectionState,
@@ -461,6 +473,7 @@ async function handleStoreOperation(
 
   if (request.type === 'store.subscribe') {
     checkSubscriptionLimit(state);
+    checkGlobalSubscriptionLimit(state);
     const result = await handleStoreSubscribe(
       request,
       state.config.store,
@@ -530,6 +543,7 @@ async function handleRulesOperation(
 
   if (request.type === 'rules.subscribe') {
     checkSubscriptionLimit(state);
+    checkGlobalSubscriptionLimit(state);
     const result = handleRulesSubscribe(
       request,
       state.config.rules,

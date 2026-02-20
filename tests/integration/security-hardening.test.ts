@@ -483,4 +483,209 @@ describe('Integration: Security Hardening', () => {
       expect(resp['details']).toBeUndefined();
     });
   });
+
+  // ── Global Subscription Limit ──────────────────────────────────
+
+  describe('global subscription limit', () => {
+    it('rejects subscriptions when global limit is reached across connections', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('data', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          value: { type: 'number', required: true },
+        },
+      });
+      store.defineQuery('all-data', async (ctx) => ctx.bucket('data').all());
+
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        connectionLimits: {
+          maxSubscriptionsPerConnection: 100,
+          maxTotalSubscriptions: 4,
+        },
+      });
+
+      // Open two connections
+      const { ws: ws1 } = await connectClient(server.port);
+      clients.push(ws1);
+      const { ws: ws2 } = await connectClient(server.port);
+      clients.push(ws2);
+
+      // Create 2 subscriptions on conn1
+      for (let i = 0; i < 2; i++) {
+        const resp = await sendRequest(ws1, {
+          type: 'store.subscribe',
+          query: 'all-data',
+        });
+        expect(resp['type']).toBe('result');
+      }
+
+      // Create 2 subscriptions on conn2 — fills global limit to 4
+      for (let i = 0; i < 2; i++) {
+        const resp = await sendRequest(ws2, {
+          type: 'store.subscribe',
+          query: 'all-data',
+        });
+        expect(resp['type']).toBe('result');
+      }
+
+      // 5th subscription (on either connection) should be rejected
+      const resp = await sendRequest(ws1, {
+        type: 'store.subscribe',
+        query: 'all-data',
+      });
+      expect(resp['type']).toBe('error');
+      expect(resp['code']).toBe('RATE_LIMITED');
+      expect(resp['message']).toContain('Global subscription limit');
+    });
+
+    it('allows subscriptions after unsubscribing frees a slot', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('data', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          value: { type: 'number', required: true },
+        },
+      });
+      store.defineQuery('all-data', async (ctx) => ctx.bucket('data').all());
+
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        connectionLimits: {
+          maxSubscriptionsPerConnection: 100,
+          maxTotalSubscriptions: 2,
+        },
+      });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+
+      // Fill the limit
+      const sub1 = await sendRequest(ws, {
+        type: 'store.subscribe',
+        query: 'all-data',
+      });
+      expect(sub1['type']).toBe('result');
+      const sub1Id = (sub1['data'] as Record<string, unknown>)['subscriptionId'];
+
+      const sub2 = await sendRequest(ws, {
+        type: 'store.subscribe',
+        query: 'all-data',
+      });
+      expect(sub2['type']).toBe('result');
+
+      // Limit reached — next should fail
+      const rejected = await sendRequest(ws, {
+        type: 'store.subscribe',
+        query: 'all-data',
+      });
+      expect(rejected['type']).toBe('error');
+      expect(rejected['code']).toBe('RATE_LIMITED');
+
+      // Unsubscribe one
+      const unsub = await sendRequest(ws, {
+        type: 'store.unsubscribe',
+        subscriptionId: sub1Id,
+      });
+      expect(unsub['type']).toBe('result');
+
+      // Now a new subscription should succeed
+      const sub3 = await sendRequest(ws, {
+        type: 'store.subscribe',
+        query: 'all-data',
+      });
+      expect(sub3['type']).toBe('result');
+    });
+
+    it('does not enforce global limit when not configured (uses default 10000)', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('data', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          value: { type: 'number', required: true },
+        },
+      });
+      store.defineQuery('all-data', async (ctx) => ctx.bucket('data').all());
+
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        // No connectionLimits — defaults to maxTotalSubscriptions: 10_000
+      });
+
+      const { ws } = await connectClient(server.port);
+      clients.push(ws);
+
+      // Should easily create a handful of subscriptions without hitting the default 10k limit
+      for (let i = 0; i < 5; i++) {
+        const resp = await sendRequest(ws, {
+          type: 'store.subscribe',
+          query: 'all-data',
+        });
+        expect(resp['type']).toBe('result');
+      }
+    });
+
+    it('enforces global limit for disconnecting connections', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('data', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          value: { type: 'number', required: true },
+        },
+      });
+      store.defineQuery('all-data', async (ctx) => ctx.bucket('data').all());
+
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        connectionLimits: {
+          maxSubscriptionsPerConnection: 100,
+          maxTotalSubscriptions: 2,
+        },
+      });
+
+      // Fill global limit on conn1
+      const { ws: ws1 } = await connectClient(server.port);
+      clients.push(ws1);
+      for (let i = 0; i < 2; i++) {
+        const resp = await sendRequest(ws1, {
+          type: 'store.subscribe',
+          query: 'all-data',
+        });
+        expect(resp['type']).toBe('result');
+      }
+
+      // conn2 is blocked
+      const { ws: ws2 } = await connectClient(server.port);
+      clients.push(ws2);
+      const rejected = await sendRequest(ws2, {
+        type: 'store.subscribe',
+        query: 'all-data',
+      });
+      expect(rejected['type']).toBe('error');
+      expect(rejected['code']).toBe('RATE_LIMITED');
+
+      // Disconnect conn1 — frees all its subscriptions
+      await closeClient(ws1);
+      await flush(200);
+
+      // Now conn2 should succeed
+      const resp = await sendRequest(ws2, {
+        type: 'store.subscribe',
+        query: 'all-data',
+      });
+      expect(resp['type']).toBe('result');
+    });
+  });
 });

@@ -103,6 +103,8 @@ export interface BackpressureConfig {
 export interface ConnectionLimitsConfig {
   /** Maximum number of active subscriptions per single connection. Default: 100. */
   readonly maxSubscriptionsPerConnection: number;
+  /** Maximum total subscriptions across all connections. Default: 10 000. */
+  readonly maxTotalSubscriptions: number;
 }
 
 // ── Defaults ──────────────────────────────────────────────────────
@@ -125,6 +127,7 @@ export const DEFAULT_BACKPRESSURE: BackpressureConfig = {
 
 export const DEFAULT_CONNECTION_LIMITS: ConnectionLimitsConfig = {
   maxSubscriptionsPerConnection: 100,
+  maxTotalSubscriptions: 10_000,
 };
 
 // ── Server Config (user-facing) ──────────────────────────────────

@@ -115,6 +115,16 @@ export function getConnections(
   }));
 }
 
+export function getTotalSubscriptionCount(
+  registry: ConnectionRegistry,
+): number {
+  let total = 0;
+  for (const match of registry.select(() => true)) {
+    total += match.metadata.storeSubscriptionCount + match.metadata.rulesSubscriptionCount;
+  }
+  return total;
+}
+
 export function getConnectionById(
   registry: ConnectionRegistry,
   connectionId: string,
