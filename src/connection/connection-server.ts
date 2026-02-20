@@ -168,7 +168,11 @@ export async function startConnection(
   const behavior = createConnectionBehavior(ws, remoteAddress, config, connectionId);
   const ref = await GenServer.start(behavior);
 
-  ws.on('message', (data) => {
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      ws.close(1003, 'binary_not_supported');
+      return;
+    }
     try {
       GenServer.cast(ref, { type: 'ws_message', raw: data.toString() });
     } catch {

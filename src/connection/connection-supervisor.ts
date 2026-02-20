@@ -62,7 +62,11 @@ export async function addConnection(
 
   registerConnection(config.connectionRegistry, connectionId, ref, remoteAddress);
 
-  ws.on('message', (data) => {
+  ws.on('message', (data, isBinary) => {
+    if (isBinary) {
+      ws.close(1003, 'binary_not_supported');
+      return;
+    }
     try {
       GenServer.cast(ref, { type: 'ws_message', raw: data.toString() });
     } catch {
