@@ -197,6 +197,13 @@ export class NoexServer {
       throw error;
     }
 
+    // Warn when rate limiting is disabled on a public-facing host.
+    if (resolvedFull.rateLimit === null && resolvedFull.host === '0.0.0.0') {
+      console.warn(
+        '[noex-server] Warning: rate limiting is disabled. Consider enabling it for production use.',
+      );
+    }
+
     const server = new NoexServer(
       resolvedFull,
       httpServer,

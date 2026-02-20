@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { Store } from '@hamicek/noex-store';
 import { NoexServer } from '../../src/index.js';
@@ -686,6 +686,63 @@ describe('Integration: Security Hardening', () => {
         query: 'all-data',
       });
       expect(resp['type']).toBe('result');
+    });
+  });
+
+  // ── Rate Limit Warning ──────────────────────────────────────────
+
+  describe('rate limit warning', () => {
+    it('warns when rate limiting is disabled on 0.0.0.0', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        store = await Store.start({ name: `sec-test-${++storeCounter}` });
+        server = await NoexServer.start({
+          store,
+          port: 0,
+          host: '0.0.0.0',
+          // no rateLimit
+        });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          '[noex-server] Warning: rate limiting is disabled. Consider enabling it for production use.',
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('does not warn when rate limiting is configured', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        store = await Store.start({ name: `sec-test-${++storeCounter}` });
+        server = await NoexServer.start({
+          store,
+          port: 0,
+          host: '0.0.0.0',
+          rateLimit: { maxRequests: 100, windowMs: 60_000 },
+        });
+
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('does not warn when host is not 0.0.0.0', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        store = await Store.start({ name: `sec-test-${++storeCounter}` });
+        server = await NoexServer.start({
+          store,
+          port: 0,
+          host: '127.0.0.1',
+          // no rateLimit, but host is loopback
+        });
+
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 });
