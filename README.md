@@ -20,7 +20,7 @@ npm install @hamicek/noex-server
 ```
 
 Requires `@hamicek/noex` and `@hamicek/noex-store` as peer dependencies and Node.js >= 20.
-`@hamicek/noex-rules` is an optional peer dependency.
+`@hamicek/noex-rules` and `better-sqlite3` are optional peer dependencies (rules engine and SQLite persistence respectively).
 
 ## Quick Start
 
@@ -144,6 +144,7 @@ interface ServerConfig {
   rateLimit?: RateLimitConfig;         // when omitted, rate limiting is disabled
   heartbeat?: HeartbeatConfig;         // default: 30 s interval, 10 s timeout
   backpressure?: BackpressureConfig;   // default: 1 MB limit, 0.8 high water mark
+  audit?: AuditConfig;                 // when omitted, audit logging is disabled
   name?: string;                       // default: 'noex-server'
 }
 ```
@@ -283,6 +284,13 @@ All messages are JSON objects sent as WebSocket text frames. Protocol version: `
 | `store.transaction` | Atomic multi-bucket transaction | `operations` |
 | `store.buckets` | List defined buckets | — |
 | `store.stats` | Store statistics | — |
+| `store.defineBucket` | Define a new bucket | `name`, `config` |
+| `store.dropBucket` | Drop a bucket | `name` |
+| `store.updateBucket` | Add fields/indexes to a bucket | `name`, `updates` |
+| `store.getBucketSchema` | Get bucket definition | `name` |
+| `store.defineQuery` | Define a declarative query | `name`, `config` |
+| `store.undefineQuery` | Remove a query definition | `name` |
+| `store.listQueries` | List defined queries | — |
 
 #### Transactions
 
