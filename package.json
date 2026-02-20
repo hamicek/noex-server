@@ -1,6 +1,6 @@
 {
   "name": "@hamicek/noex-server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WebSocket/HTTP server for @hamicek/noex-store and @hamicek/noex-rules",
   "type": "module",
   "main": "./dist/index.js",
