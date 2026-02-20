@@ -23,6 +23,9 @@ const EMPTY_CLI: CliValues = {
   adminSecret: undefined,
   noRules: undefined,
   audit: undefined,
+  noErrorDetails: undefined,
+  allowedOrigins: undefined,
+  maxConnectionsPerIp: undefined,
 };
 
 const EMPTY_FILE: FileConfig = {};
@@ -50,6 +53,9 @@ describe('mergeConfig', () => {
       heartbeat: undefined,
       backpressure: undefined,
       connectionLimits: undefined,
+      exposeErrorDetails: true,
+      allowedOrigins: null,
+      maxConnectionsPerIp: null,
     });
   });
 
@@ -224,6 +230,9 @@ describe('mergeConfig', () => {
       adminSecret: 'cli-secret',
       noRules: true,
       audit: true,
+      noErrorDetails: true,
+      allowedOrigins: 'https://a.com,https://b.com',
+      maxConnectionsPerIp: 5,
     };
 
     const file: FileConfig = {
@@ -239,6 +248,9 @@ describe('mergeConfig', () => {
       audit: false,
       rateLimit: { maxRequests: 100, windowMs: 60000 },
       heartbeat: { intervalMs: 15000, timeoutMs: 5000 },
+      exposeErrorDetails: true,
+      allowedOrigins: ['https://file.com'],
+      maxConnectionsPerIp: 100,
     };
 
     const result = mergeConfig(cli, file);
@@ -256,6 +268,64 @@ describe('mergeConfig', () => {
     // Sub-configs come from file only
     expect(result.rateLimit).toEqual({ maxRequests: 100, windowMs: 60000 });
     expect(result.heartbeat).toEqual({ intervalMs: 15000, timeoutMs: 5000 });
+    // Security — CLI overrides file
+    expect(result.exposeErrorDetails).toBe(false);
+    expect(result.allowedOrigins).toEqual(['https://a.com', 'https://b.com']);
+    expect(result.maxConnectionsPerIp).toBe(5);
+  });
+
+  // ── Security options ──────────────────────────────────────────
+
+  it('--no-error-details sets exposeErrorDetails to false', () => {
+    const result = mergeConfig({ ...EMPTY_CLI, noErrorDetails: true }, EMPTY_FILE);
+    expect(result.exposeErrorDetails).toBe(false);
+  });
+
+  it('--no-error-details overrides file exposeErrorDetails=true', () => {
+    const result = mergeConfig(
+      { ...EMPTY_CLI, noErrorDetails: true },
+      { exposeErrorDetails: true },
+    );
+    expect(result.exposeErrorDetails).toBe(false);
+  });
+
+  it('file exposeErrorDetails=false is respected when CLI does not override', () => {
+    const result = mergeConfig(EMPTY_CLI, { exposeErrorDetails: false });
+    expect(result.exposeErrorDetails).toBe(false);
+  });
+
+  it('CLI --allowed-origins parses comma-separated list', () => {
+    const result = mergeConfig(
+      { ...EMPTY_CLI, allowedOrigins: 'https://a.com, https://b.com' },
+      EMPTY_FILE,
+    );
+    expect(result.allowedOrigins).toEqual(['https://a.com', 'https://b.com']);
+  });
+
+  it('CLI --allowed-origins overrides file allowedOrigins', () => {
+    const result = mergeConfig(
+      { ...EMPTY_CLI, allowedOrigins: 'https://cli.com' },
+      { allowedOrigins: ['https://file.com'] },
+    );
+    expect(result.allowedOrigins).toEqual(['https://cli.com']);
+  });
+
+  it('file allowedOrigins is used when CLI does not set it', () => {
+    const result = mergeConfig(EMPTY_CLI, { allowedOrigins: ['https://file.com'] });
+    expect(result.allowedOrigins).toEqual(['https://file.com']);
+  });
+
+  it('CLI --max-connections-per-ip overrides file', () => {
+    const result = mergeConfig(
+      { ...EMPTY_CLI, maxConnectionsPerIp: 10 },
+      { maxConnectionsPerIp: 50 },
+    );
+    expect(result.maxConnectionsPerIp).toBe(10);
+  });
+
+  it('file maxConnectionsPerIp is used when CLI does not set it', () => {
+    const result = mergeConfig(EMPTY_CLI, { maxConnectionsPerIp: 25 });
+    expect(result.maxConnectionsPerIp).toBe(25);
   });
 });
 

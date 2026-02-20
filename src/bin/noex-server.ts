@@ -35,6 +35,9 @@ export interface CliValues {
   adminSecret: string | undefined;
   noRules: boolean | undefined;
   audit: boolean | undefined;
+  noErrorDetails: boolean | undefined;
+  allowedOrigins: string | undefined;
+  maxConnectionsPerIp: number | undefined;
 }
 
 export interface FileConfig {
@@ -51,7 +54,10 @@ export interface FileConfig {
   rateLimit?: { maxRequests: number; windowMs: number };
   heartbeat?: { intervalMs: number; timeoutMs: number };
   backpressure?: { maxBufferedBytes: number; highWaterMark: number };
-  connectionLimits?: { maxSubscriptionsPerConnection: number };
+  connectionLimits?: { maxSubscriptionsPerConnection: number; maxTotalSubscriptions?: number };
+  exposeErrorDetails?: boolean;
+  allowedOrigins?: string[];
+  maxConnectionsPerIp?: number;
 }
 
 export interface ResolvedCliConfig {
@@ -73,7 +79,11 @@ export interface ResolvedCliConfig {
   } | undefined;
   readonly connectionLimits: {
     maxSubscriptionsPerConnection: number;
+    maxTotalSubscriptions?: number;
   } | undefined;
+  readonly exposeErrorDetails: boolean;
+  readonly allowedOrigins: readonly string[] | null;
+  readonly maxConnectionsPerIp: number | null;
 }
 
 // =============================================================================
@@ -93,6 +103,9 @@ const argsConfig: ParseArgsConfig = {
     'admin-secret': { type: 'string' },
     'no-rules': { type: 'boolean' },
     audit: { type: 'boolean' },
+    'no-error-details': { type: 'boolean' },
+    'allowed-origins': { type: 'string' },
+    'max-connections-per-ip': { type: 'string' },
     help: { type: 'boolean', short: 'h' },
     version: { type: 'boolean', short: 'v' },
   },
@@ -129,6 +142,11 @@ OPTIONS:
   FEATURES:
       --no-rules              Disable rules engine
       --audit                 Enable audit log
+
+  SECURITY:
+      --no-error-details      Hide error details in responses (production)
+      --allowed-origins <list> Comma-separated allowed Origin headers
+      --max-connections-per-ip <n> Max WebSocket connections per IP
 
   -h, --help                  Show this help message
   -v, --version               Show version number
@@ -178,6 +196,9 @@ const DEFAULTS: ResolvedCliConfig = {
   heartbeat: undefined,
   backpressure: undefined,
   connectionLimits: undefined,
+  exposeErrorDetails: true,
+  allowedOrigins: null,
+  maxConnectionsPerIp: null,
 };
 
 export function mergeConfig(
@@ -199,6 +220,13 @@ export function mergeConfig(
     heartbeat: file.heartbeat,
     backpressure: file.backpressure,
     connectionLimits: file.connectionLimits,
+    exposeErrorDetails: cli.noErrorDetails === true
+      ? false
+      : (file.exposeErrorDetails ?? DEFAULTS.exposeErrorDetails),
+    allowedOrigins: cli.allowedOrigins !== undefined
+      ? cli.allowedOrigins.split(',').map(o => o.trim())
+      : (file.allowedOrigins ?? DEFAULTS.allowedOrigins),
+    maxConnectionsPerIp: cli.maxConnectionsPerIp ?? file.maxConnectionsPerIp ?? DEFAULTS.maxConnectionsPerIp,
   };
 }
 
@@ -264,6 +292,9 @@ noex-server v${VERSION}
   Auth:         ${config.auth ? 'built-in' : 'disabled'}
   Rules:        ${config.rules ? 'enabled' : 'disabled'}
   Audit:        ${config.audit ? 'enabled' : 'disabled'}
+  Error details: ${config.exposeErrorDetails ? 'exposed' : 'hidden'}
+  Origins:      ${config.allowedOrigins !== null ? config.allowedOrigins.join(', ') : 'any'}
+  Max conn/IP:  ${config.maxConnectionsPerIp !== null ? config.maxConnectionsPerIp : 'unlimited'}
 `.trim();
 
   console.log(banner);
@@ -322,6 +353,11 @@ async function main(): Promise<void> {
     adminSecret: args.values['admin-secret'] as string | undefined,
     noRules: args.values['no-rules'] as boolean | undefined,
     audit: args.values['audit'] as boolean | undefined,
+    noErrorDetails: args.values['no-error-details'] as boolean | undefined,
+    allowedOrigins: args.values['allowed-origins'] as string | undefined,
+    maxConnectionsPerIp: args.values['max-connections-per-ip'] !== undefined
+      ? Number(args.values['max-connections-per-ip'])
+      : undefined,
   };
 
   // Merge & validate
@@ -398,6 +434,13 @@ async function main(): Promise<void> {
       ? { connectionLimits: config.connectionLimits }
       : {}),
     ...(config.audit ? { audit: {} } : {}),
+    exposeErrorDetails: config.exposeErrorDetails,
+    ...(config.allowedOrigins !== null
+      ? { allowedOrigins: config.allowedOrigins }
+      : {}),
+    ...(config.maxConnectionsPerIp !== null
+      ? { maxConnectionsPerIp: config.maxConnectionsPerIp }
+      : {}),
   };
 
   // Start server
