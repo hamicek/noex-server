@@ -184,6 +184,15 @@ export interface ServerConfig {
    * allowed. When undefined, origin validation is disabled (suitable for dev).
    */
   readonly allowedOrigins?: readonly string[];
+
+  /**
+   * Maximum number of concurrent WebSocket connections from a single IP address.
+   * When set, the server rejects new connections from an IP that already has
+   * this many active connections (close code 4003, reason 'too_many_connections').
+   *
+   * When undefined, no per-IP limit is enforced.
+   */
+  readonly maxConnectionsPerIp?: number;
 }
 
 // ── Resolved Config (all defaults applied) ────────────────────────
@@ -208,6 +217,7 @@ export interface ResolvedServerConfig {
   readonly identityManager: IdentityManager | null;
   readonly name: string;
   readonly allowedOrigins: readonly string[] | null;
+  readonly maxConnectionsPerIp: number | null;
 }
 
 // ── Resolve ───────────────────────────────────────────────────────
@@ -243,5 +253,6 @@ export function resolveConfig(config: ServerConfig): ResolvedServerConfig {
     identityManager: null,
     name: config.name ?? DEFAULT_NAME,
     allowedOrigins: config.allowedOrigins ?? null,
+    maxConnectionsPerIp: config.maxConnectionsPerIp ?? null,
   };
 }

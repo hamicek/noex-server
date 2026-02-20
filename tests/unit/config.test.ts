@@ -98,6 +98,7 @@ describe('resolveConfig', () => {
       identityManager: null,
       name: 'noex-server',
       allowedOrigins: null,
+      maxConnectionsPerIp: null,
     });
   });
 

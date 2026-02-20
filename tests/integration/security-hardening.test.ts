@@ -235,4 +235,113 @@ describe('Integration: Security Hardening', () => {
       });
     });
   });
+
+  // ── Max Connections Per IP ────────────────────────────────────
+
+  describe('max connections per IP', () => {
+    it('rejects connection when IP exceeds the limit', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        maxConnectionsPerIp: 2,
+      });
+
+      // Open 2 connections — both should succeed
+      const { ws: ws1 } = await connectClient(server.port);
+      clients.push(ws1);
+      const { ws: ws2 } = await connectClient(server.port);
+      clients.push(ws2);
+
+      // 3rd connection from same IP should be rejected with 4003
+      const closed = new Promise<{ code: number; reason: string }>((resolve) => {
+        const ws3 = new WebSocket(`ws://127.0.0.1:${server!.port}`);
+        clients.push(ws3);
+        ws3.once('close', (code, reason) => {
+          resolve({ code, reason: reason.toString() });
+        });
+      });
+
+      const { code, reason } = await closed;
+      expect(code).toBe(4003);
+      expect(reason).toBe('too_many_connections');
+    });
+
+    it('allows new connection after one disconnects', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        maxConnectionsPerIp: 2,
+      });
+
+      const { ws: ws1 } = await connectClient(server.port);
+      clients.push(ws1);
+      const { ws: ws2 } = await connectClient(server.port);
+      clients.push(ws2);
+
+      // Close one connection to free a slot
+      await closeClient(ws1);
+
+      // Now a new connection should succeed
+      const { ws: ws3, welcome } = await connectClient(server.port);
+      clients.push(ws3);
+      expect(welcome['type']).toBe('welcome');
+    });
+
+    it('does not limit when maxConnectionsPerIp is not configured', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+      });
+
+      // Open 5 connections without any limit — all should succeed
+      for (let i = 0; i < 5; i++) {
+        const { ws } = await connectClient(server.port);
+        clients.push(ws);
+      }
+
+      expect(server.connectionCount).toBe(5);
+    });
+
+    it('existing connections remain functional after rejecting excess', async () => {
+      store = await Store.start({ name: `sec-test-${++storeCounter}` });
+      await store.defineBucket('data', {
+        key: 'id',
+        schema: {
+          id: { type: 'string', generated: 'uuid' },
+          value: { type: 'number', required: true },
+        },
+      });
+      server = await NoexServer.start({
+        store,
+        port: 0,
+        host: '127.0.0.1',
+        maxConnectionsPerIp: 1,
+      });
+
+      const { ws: ws1 } = await connectClient(server.port);
+      clients.push(ws1);
+
+      // 2nd connection gets rejected
+      const closed = new Promise<void>((resolve) => {
+        const ws2 = new WebSocket(`ws://127.0.0.1:${server!.port}`);
+        clients.push(ws2);
+        ws2.once('close', () => resolve());
+      });
+      await closed;
+
+      // Original connection still works
+      const resp = await sendRequest(ws1, {
+        type: 'store.insert',
+        bucket: 'data',
+        data: { value: 99 },
+      });
+      expect(resp['type']).toBe('result');
+    });
+  });
 });

@@ -206,12 +206,31 @@ export class NoexServer {
       connectionRegistry,
     );
 
+    const ipCounts = new Map<string, number>();
+
     wss.on('connection', (ws, request) => {
       if (!server.#running) {
         ws.close(1001, 'server_shutting_down');
         return;
       }
       const remoteAddress = request.socket.remoteAddress ?? 'unknown';
+
+      if (resolvedFull.maxConnectionsPerIp !== null) {
+        const current = ipCounts.get(remoteAddress) ?? 0;
+        if (current >= resolvedFull.maxConnectionsPerIp) {
+          ws.close(4003, 'too_many_connections');
+          return;
+        }
+      }
+
+      const count = (ipCounts.get(remoteAddress) ?? 0) + 1;
+      ipCounts.set(remoteAddress, count);
+      ws.once('close', () => {
+        const c = ipCounts.get(remoteAddress) ?? 1;
+        if (c <= 1) ipCounts.delete(remoteAddress);
+        else ipCounts.set(remoteAddress, c - 1);
+      });
+
       void addConnection(
         supervisorRef,
         ws,
